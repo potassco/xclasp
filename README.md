@@ -1,7 +1,7 @@
 # xclasp—A Variant of clasp for Extracting Learned Constraints
 
 `xclasp` is an extension of the answer set solver [`clasp`](https://github.com/potassco/clasp) that allows for logging the constraints learned while solving.
-The extracted constraints can then be reused by offline procedures, for instance, to generalize the constraints with [`ginkgo`](http://www.cs.uni-potsdam.de/wv/ginkgo/).
+The extracted constraints can then be reused by offline procedures, for instance, to generalize the constraints with [`ginkgo`](https://github.com/potassco/ginkgo/).
 
 ## Building and Installation
 
