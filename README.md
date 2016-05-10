@@ -1,16 +1,29 @@
-                                   xclasp-3.x
-             A variant of clasp for extracting learned constraints
-                    http://www.cs.uni-potsdam.de/wv/xclasp/
+# xclasp—A Variant of clasp for Extracting Learned Constraints
 
-OVERVIEW
-  xclasp is an extension of the answer set solver clasp that allows for logging
-  the constraints learned while solving. The extracted constraints can then be
-  reused by offline procedures, for instance, to generalize the constraints.
+`xclasp` is an extension of the answer set solver [`clasp`](https://github.com/potassco/clasp) that allows for logging the constraints learned while solving.
+The extracted constraints can then be reused by offline procedures, for instance, to generalize the constraints with [`ginkgo`](http://www.cs.uni-potsdam.de/wv/ginkgo/).
 
-  clasp’s original README is reproduced below.
+## Building and Installation
 
-================================================================================
+`xclasp` requires a C++11-capable compiler.
+Aside from that, the build instructions of [`clasp`](https://github.com/potassco/clasp) apply.
 
+## Usage
+
+`xclasp` works like `clasp`.
+With the additional option `--log-learnts=n`, the first `n` conflict constraints are logged to stderr.
+`--logged-learnt-limit=n` tells `xclasp` to stop after having extracted `n` constraints.
+`--resolution-scheme=named` tells `xclasp` to use the named-literals resolution scheme, a modification of the 1UIP resolution scheme that enforces all literals to be named.
+
+```bash
+> gringo program.lp | xclasp --log-learnts --resolution-scheme=named --heuristic=Domain --dom-mod=1,16 --loops=no --reverse-arcs=0 --otfs=0
+```
+
+When invoking `xclasp` like this, all extracted constraints are guaranteed to contain named literals only (given that all necessary symbols are exported from the grounder via #show commands).
+
+## Original `clasp` Readme
+
+```text
                                 clasp-3.x
               A conflict-driven nogood learning answer set solver 
                      http://www.cs.uni-potsdam.de/clasp/
@@ -134,6 +147,4 @@ USAGE
         because search was either interrupted or not started
     127: if clasp ran out of memory
     Furthermore, the exit status of 1 indicates an error.
-	
-
-
+```
