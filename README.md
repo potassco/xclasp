@@ -5,7 +5,7 @@ The extracted constraints can then be reused by offline procedures, for instance
 
 ## Literature
 
-* Patrick Lühne, 2015. [*Generalizing Learned Knowledge in Answer Set Solving*](https://www.luehne.de/theses/generalizing-learned-knowledge-in-answer-set-solving.pdf). M.Sc. Thesis, Hasso Plattner Institute, Potsdam
+* [Patrick Lühne](https://www.luehne.de), 2015. [*Generalizing Learned Knowledge in Answer Set Solving*](https://www.luehne.de/theses/generalizing-learned-knowledge-in-answer-set-solving.pdf). M.Sc. Thesis, Hasso Plattner Institute, Potsdam
 
 ## Building and Installation
 
