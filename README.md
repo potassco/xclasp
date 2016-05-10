@@ -21,6 +21,11 @@ With the additional option `--log-learnts=n`, the first `n` conflict constraints
 
 When invoking `xclasp` like this, all extracted constraints are guaranteed to contain named literals only (given that all necessary symbols are exported from the grounder via #show commands).
 
+## Contributors
+
+* Benjamin Kaufmann (`clasp` and `xclasp`)
+* [Patrick Lühne](https://www.luehne.de) (`xclasp`)
+
 ## Original `clasp` Readme
 
 ```text
