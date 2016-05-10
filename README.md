@@ -3,6 +3,10 @@
 `xclasp` is an extension of the answer set solver [`clasp`](https://github.com/potassco/clasp) that allows for logging the constraints learned while solving.
 The extracted constraints can then be reused by offline procedures, for instance, to generalize the constraints with [`ginkgo`](https://github.com/potassco/ginkgo/).
 
+## Literature
+
+* Patrick Lühne, 2015. [*Generalizing Learned Knowledge in Answer Set Solving*](https://www.luehne.de/theses/generalizing-learned-knowledge-in-answer-set-solving.pdf). M.Sc. Thesis, Hasso Plattner Institute, Potsdam
+
 ## Building and Installation
 
 `xclasp` requires a C++11-capable compiler.
