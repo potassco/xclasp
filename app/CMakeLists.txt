@@ -7,5 +7,5 @@ if(TBB_FOUND)
 	target_link_libraries(clasp_app tbb)
 endif(TBB_FOUND)
 
-set_target_properties(clasp_app PROPERTIES OUTPUT_NAME clasp)
+set_target_properties(clasp_app PROPERTIES OUTPUT_NAME xclasp)
 SET( EXECUTABLE_OUTPUT_PATH  ${CMAKE_BINARY_DIR}/bin)

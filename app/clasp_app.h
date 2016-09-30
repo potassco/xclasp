@@ -168,7 +168,7 @@ protected:
 class ClaspApp : public ClaspAppBase {
 public:
 	ClaspApp();
-	const char* getName()       const { return "clasp"; }
+	const char* getName()       const { return "xclasp"; }
 	const char* getVersion()    const { return CLASP_VERSION; }
 	const char* getUsage()      const { 
 		return 

@@ -1,3 +1,16 @@
+                                   xclasp-3.x
+             A variant of clasp for extracting learned constraints
+                    http://www.cs.uni-potsdam.de/wv/xclasp/
+
+OVERVIEW
+  xclasp is an extension of the answer set solver clasp that allows for logging
+  the constraints learned while solving. The extracted constraints can then be
+  reused by offline procedures, for instance, to generalize the constraints.
+
+  clasp’s original README is reproduced below.
+
+================================================================================
+
                                 clasp-3.x
               A conflict-driven nogood learning answer set solver 
                      http://www.cs.uni-potsdam.de/clasp/

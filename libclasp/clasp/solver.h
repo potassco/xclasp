@@ -239,6 +239,8 @@ public:
 		stats.addLearnt(size, type); 
 	}
 	void addLearnt(LearntConstraint* c, uint32 size) { addLearnt(c, size, c->type()); }
+	//! Logs a learnt conflict to the command line.
+	void logClause(const LitVec& clause, const ClauseInfo& info);
 	//! Tries to receive at most maxOut clauses.
 	/*!
 	 * The function queries the distributor object for new clauses to be delivered to
@@ -642,6 +644,7 @@ public:
 	//! Returns the enumeration constraint set by the enumerator used.
 	Constraint*       enumerationConstraint()        const { return enum_; }
 	DBRef             constraints()                  const { return constraints_; }
+	uint32            loggedConstraints()            const { return loggedConstraints_; }
 	//! Returns the idx'th learnt constraint.
 	/*!
 	 * \pre idx < numLearntConstraints()
@@ -856,6 +859,8 @@ private:
 	uint32  undoUntilImpl(uint32 dl, bool sp);
 	void    undoLevel(bool sp);
 	uint32  analyzeConflict();
+	uint32  analyzeConflictFirstUIP();
+	uint32  analyzeConflictDecision();
 	void    otfs(Antecedent& lhs, const Antecedent& rhs, Literal p, bool final);
 	ClauseHead* otfsRemove(ClauseHead* c, const LitVec* newC);
 	uint32  ccMinimize(LitVec& cc, LitVec& removed, uint32 antes, CCMinRecursive* ccMin);
@@ -897,6 +902,7 @@ private:
 	uint32            lastSimp_ :30;// number of top-level assignments on last call to simplify
 	uint32            shufSimp_ : 1;// shuffle db on next simplify?
 	uint32            initPost_ : 1;// initialize new post propagators?
+	uint32            loggedConstraints_; // number of already logged constraints
 };
 
 inline bool isRevLit(const Solver& s, Literal p, uint32 maxL) {

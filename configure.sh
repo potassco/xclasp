@@ -124,6 +124,8 @@ case $CONFIG in
 		;;
 esac
 
+CXXFLAGS="${CXXFLAGS} -std=c++11"
+
 BUILDPATH="build/${CONFIG}"
 
 if [[ $mt == 0 ]]; then
@@ -224,7 +226,7 @@ cat $PRO_MAKES >> Makefile
 # write project config
 touch  .CONFIG
 echo "PROJECT_ROOT := $ROOTPATH"            >> .CONFIG
-echo "TARGET       := bin/clasp"            >> .CONFIG
+echo "TARGET       := bin/xclasp"           >> .CONFIG
 echo "FLAGS        := FLAGS"                >> .CONFIG
 echo "SOURCE_DIR   := \$(PROJECT_ROOT)/app" >> .CONFIG
 echo "INCLUDE_DIR  := \$(PROJECT_ROOT)/app" >> .CONFIG
@@ -257,13 +259,13 @@ echo
 echo "Configuration successfully written to ${BUILDPATH}."
 echo "Make flags written to ${BUILDPATH}/FLAGS."
 echo
-echo "To compile clasp type:"
+echo "To compile xclasp type:"
 echo "  cd ${BUILDPATH}"
 echo "  make"
 echo
-echo "To install clasp afterwards type:"
+echo "To install xclasp afterwards type:"
 echo "  make install"
-echo "or copy '${BUILDPATH}/clasp' to a directory of your choice."
+echo "or copy '${BUILDPATH}/xclasp' to a directory of your choice."
 if [ ! -d "$INSTALLPATH" ]; then
 echo
 echo "Note: install path '$INSTALLPATH' does not exist"

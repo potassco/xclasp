@@ -13,6 +13,7 @@ else(NOT TBB_FOUND)
 	link_directories(${TBB_LIBRARY_DIRS})
 
 endif(NOT TBB_FOUND)
+add_definitions(-std=c++11)
 add_subdirectory(libclasp)
 add_subdirectory(libprogram_opts)
 add_subdirectory(app)

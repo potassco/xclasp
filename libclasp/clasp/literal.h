@@ -289,6 +289,7 @@ public:
 		for (const_iterator it = map_.begin(), end = map_.end(); it != end; ++it) {
 			o.map_.push_back(value_type(it->first, symbol_type(it->second.lit, dupName(it->second.name.c_str()))));
 		}
+		o.invMap_   = invMap_;
 		o.lastSort_ = lastSort_;
 		o.lastStart_= lastStart_;
 		o.end_      = end_;
@@ -316,6 +317,13 @@ public:
 		const_iterator it = std::lower_bound(begin(), end(), i, LessKey());
 		return it != end() && it->first == i ? &it->second : 0;
 	}
+	// Requires computeVarMap()!
+	const symbol_type *findByVariable(const Var &variable) const {
+		if (variable >= invMap_.size() || !invMap_[variable]) {
+			return 0;
+		}
+		return &map_[invMap_[variable] - 1].second;
+	}
 	const_iterator lower_bound(const_iterator start, key_type i) const {
 		return std::lower_bound(start, end(), i, LessKey());
 	}
@@ -332,6 +340,7 @@ public:
 			freeName(it->second.name.c_str());
 		}
 		map_.clear();
+		invMap_.clear();
 		domLits.clear();
 		lastSort_ = 0; 
 		lastStart_= 0; 
@@ -369,6 +378,15 @@ public:
 		assert(unique() && "Symbol table: Duplicate atoms are not allowed\n");
 		lastSort_ = map_.size();
 	}
+	// Creates a lookup table to enable efficient findByVariable().
+	void computeVarMap() {
+		for (const_iterator it = curBegin(), end = this->end(), beg = this->begin(); it != end; ++it) {
+			uint32 k = it->second.lit.var();
+			if (k >= invMap_.size()) { invMap_.resize(k + 1, 0); }
+			Var& v = invMap_[k];
+			if (v == 0) { v = std::distance(beg, it) + 1; }
+		}
+	}
 	LitVec domLits;
 private:
 	SymbolTable(const SymbolTable&);
@@ -393,6 +411,7 @@ private:
 		bool operator()(key_type i, const value_type& rhs) const { return i < rhs.first; }
 	};
 	map_type            map_;
+	VarVec              invMap_;
 	map_type::size_type lastSort_;
 	map_type::size_type lastStart_;
 	uint32              end_;

@@ -19,6 +19,8 @@
 //
 #include <clasp/solver.h>
 #include <clasp/clause.h>
+#include <iostream>
+
 #if (defined(__cplusplus) && __cplusplus >= 201103L) || (defined(_MSC_VER) && _MSC_VER > 1500) || (defined(_LIBCPP_VERSION))
 #include <unordered_set>
 typedef std::unordered_set<Clasp::Constraint*> ConstraintSet;
@@ -131,7 +133,8 @@ Solver::Solver(SharedContext* ctx, uint32 id)
 	, dbIdx_(0)
 	, lastSimp_(0)
 	, shufSimp_(0)
-	, initPost_(0){
+	, initPost_(0)
+	, loggedConstraints_(0){
 	Var sentVar = assign_.addVar();
 	assign_.setValue(sentVar, value_true);
 	markSeen(sentVar);
@@ -272,6 +275,17 @@ void Solver::startInit(uint32 numConsGuess, const SolverParams& params) {
 	post_.disable(); // disable post propagators during setup
 	initPost_ = 0;   // defer calls to PostPropagator::init()
 	heuristic_->startInit(*this);
+
+	if (strategy_.resScheme != SolverStrategies::res_first_uip)
+	{
+		assert(!strategy_.bumpVarAct && "Bumping not implemented for the Decision resolution scheme");
+		assert(strategy_.otfs == 0 && "On-the-fly subsumption not implemented for the Decision resolution scheme");
+		assert(params.loopRep == 3 && "Learning loops not supported in combination with the Decision resolution scheme");
+		assert(params.heuId == Heuristic_t::heu_domain && "Heuristics are not supported in combination with the Decision resolution scheme");
+		assert(params.reverseArcs == 0 && "Reverse arcs not supported in combination with these resolution schemes");
+		assert(params.domPref == 16);
+		assert(params.domMod == 1);
+	}
 }
 
 bool Solver::cloneDB(const ConstraintDB& db) {
@@ -309,6 +323,10 @@ bool Solver::endInit() {
 			Literal x = DecisionHeuristic::selectLiteral(*this, v, 0);
 			setPref(v, ValueSet::user_value, x.sign() ? value_false : value_true);
 		}
+	}
+	if (id() == 0 && strategy_.resScheme != SolverStrategies::res_first_uip) {
+		// enable O(1) var -> name lookup
+		shared_->symbolTable().computeVarMap();
 	}
 	post_.enable(); // enable all post propagators
 	return propagate() && simplify();
@@ -850,6 +868,8 @@ bool Solver::resolveConflict() {
 			uint32 uipLevel = analyzeConflict();
 			stats.updateJumps(decisionLevel(), uipLevel, backtrackLevel(), ccInfo_.lbd());
 			undoUntil( uipLevel );
+			if (shared_->configuration()->context().logLearnts > 0)
+				logClause(cc_, ccInfo_);
 			return ClauseCreator::create(*this, cc_, ClauseCreator::clause_no_prepare, ccInfo_);
 		}
 		else {
@@ -1001,10 +1021,50 @@ inline ClauseHead* clause(const Antecedent& ante) {
 	return ante.isNull() || ante.type() != Antecedent::generic_constraint ? 0 : ante.constraint()->clause();
 }
 
+void Solver::logClause(const LitVec& literals, const ClauseInfo& info) {
+	const char* sep = ":- ";
+	for (const auto& lit : literals)
+	{
+		std::cerr << sep;
+		sep = ", ";
+
+		const auto *literal = shared_->symbolTable().findByVariable(lit.var());
+
+		if (!literal)
+		{
+			std::cerr << "\033[1;33m[?]\033[0m";
+			continue;
+		}
+
+		if (!(lit.sign() ^ literal->lit.sign()))
+			std::cerr << "not ";
+
+		std::cerr << literal->name.c_str();
+	}
+
+	std::cerr << ". %lbd=" << info.lbd() << "\n" << std::endl;
+
+	++loggedConstraints_;
+}
+
 // computes the First-UIP clause and stores it in cc_, where cc_[0] is the asserting literal (inverted UIP)
 // and cc_[1] is a literal from the asserting level (if > 0)
 // RETURN: asserting level of the derived conflict clause
-uint32 Solver::analyzeConflict() {
+uint32 Solver::analyzeConflict()
+{
+	switch (strategy_.resScheme)
+	{
+		default:
+		case SolverStrategies::res_first_uip:
+			return analyzeConflictFirstUIP();
+		case SolverStrategies::res_named:
+			return analyzeConflictDecision();
+		case SolverStrategies::res_decision:
+			std::cerr << "[Error] Decision scheme currently not implemented" << std::endl;
+			exit(EXIT_FAILURE);
+	}
+}
+uint32 Solver::analyzeConflictFirstUIP() {
 	// must be called here, because we unassign vars during analyzeConflict
 	heuristic_->undoUntil( *this, levels_.back().trailPos );
 	uint32 onLevel  = 0;        // number of literals from the current DL in resolvent
@@ -1071,6 +1131,79 @@ uint32 Solver::analyzeConflict() {
 		bumpAct_.push_back(WeightLiteral(p, static_cast<LearntConstraint*>(reason(p).constraint())->activity().lbd()));
 	}
 	return simplifyConflictClause(cc_, ccInfo_, lastRes);
+}
+uint32 Solver::analyzeConflictDecision() {
+	uint32 numberOfMarkedLiterals = 0;
+	int32 numberOfLiteralsOnDecisionLevel = 0;
+
+	cc_.clear();
+
+	auto markConflictVariables = [&]()
+	{
+		for (const auto &literal : conflict_)
+		{
+			if (seen(literal.var()))
+				continue;
+
+			const auto literalLevel = level(literal.var());
+
+			assert(isTrue(literal));
+			assert(literalLevel > 0);
+
+			markSeen(literal.var());
+			numberOfMarkedLiterals++;
+
+			if (literalLevel < decisionLevel())
+				markLevel(literalLevel);
+			else
+				++numberOfLiteralsOnDecisionLevel;
+		}
+	};
+
+	markConflictVariables();
+
+	for (LitVec::size_type index = assign_.trail.size(); index-- > 0;)
+	{
+		const auto &literal = assign_.trail[index];
+
+		if (level(literal.var()) == 0 || numberOfMarkedLiterals == 0)
+			break;
+
+		if (!seen(literal.var()))
+			continue;
+
+		--numberOfLiteralsOnDecisionLevel;
+
+		const bool noReason = reason(literal).isNull();
+		const bool isUIP = numberOfLiteralsOnDecisionLevel == 0;
+		const bool isOnLowerLevel = level(literal.var()) != decisionLevel();
+		const bool hasName = shared_->symbolTable().findByVariable(literal.var()) != nullptr;
+
+		if (noReason || ((isUIP || isOnLowerLevel) && hasName))
+		{
+			cc_.push_back(~literal);
+			continue;
+		}
+
+		clearSeen(literal.var());
+		numberOfMarkedLiterals--;
+
+		reason(literal, conflict_);
+		heuristic_->updateReason(*this, conflict_, literal);
+		markConflictVariables();
+	}
+
+	clearSeen(cc_[0].var());
+
+	for (const auto &literal : assign_.trail)
+		assert(level(literal.var()) != 0 || seen(literal.var()));
+
+	assert(level(cc_[0].var()) == decisionLevel());
+
+	for (LitVec::size_type i = 1; i < cc_.size(); i++)
+		assert(seen(cc_[i].var()));
+
+	return simplifyConflictClause(cc_, ccInfo_, nullptr);
 }
 
 void Solver::otfs(Antecedent& lhs, const Antecedent& rhs, Literal p, bool final) {
@@ -1625,7 +1758,11 @@ ValueRep Solver::search(SearchLimits& limit, double rf) {
 				limit.conflicts -= conflicts < limit.conflicts ? conflicts : limit.conflicts;
 				if (local && updateBranch(conflicts) >= local)              { limit.local = 0; }
 				if (hasConflict() || (decisionLevel() == 0 && !simplify())) { return value_false; }
-				if ((limit.reached() || learntLimit(limit))&&numFreeVars()) { return value_free;  }
+				const bool loggedLearntLimit =
+					loggedConstraints_ >= shared_->configuration()->context().loggedLearntLimit;
+				if ((limit.reached() || learntLimit(limit) || loggedLearntLimit)&&numFreeVars()) {
+					return value_free;
+				}
 			}
 			if (decideNextBranch(rf)) { conflicts = !propagate(); }
 			else                      { break; }

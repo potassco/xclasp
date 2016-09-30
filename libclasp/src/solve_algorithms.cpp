@@ -161,6 +161,9 @@ ValueRep BasicSolve::State::solve(Solver& s, const SolveParams& p, SolveLimits* 
 		progress.lLimit = sLimit.learnts;
 		if (progress.op) { s.sharedContext()->report(progress); progress.op = (uint32)EventType::event_none; }
 		result          = s.search(sLimit, p.randProb);
+		// check limit of logged learnts
+		if (result == value_free && s.loggedConstraints() >= s.sharedContext()->configuration()->context().loggedLearntLimit)
+			return result;
 		minLimit       -= sLimit.conflicts; // number of conflicts in this iteration
 		if (result != value_free) {
 			progress.op = static_cast<uint32>(EventType::event_exit);

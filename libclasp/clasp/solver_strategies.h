@@ -126,6 +126,12 @@ struct SolverStrategies {
 		cc_rep_uip     = 2,/*!< Replace conflict clause with all uip clause. */
 		cc_rep_dynamic = 3,/*!< Dynamically select between cc_rep_decision and cc_rep_uip. */
 	};
+	//! Resolution scheme in conflict analysis.
+	enum ResScheme {
+		res_first_uip = 0, /*!< First-UIP resolution.       */
+		res_decision  = 1, /*!< Decision resolution.        */
+		res_named     = 2, /*!< First-Named-UIP resolution. */
+	};
 	enum WatchInit  { watch_first = 0, watch_rand = 1, watch_least = 2 };
 	enum UpdateMode { update_on_propagate = 0, update_on_conflict  = 1 };
 
@@ -152,6 +158,9 @@ struct SolverStrategies {
 	uint32    id            : 6;  // Solver id - SHALL ONLY BE SET BY Shared Context!
 	uint32    heuReserved   : 3;  // id of active heuristic - SHALL ONLY BE SET BY Solver!
 	uint32    reserved      : 1;
+	//----- 32 bit ------------
+	uint32    reserved2     : 30; /*!< Reserved for future use. */
+	uint32    resScheme     : 2;  /*!< Resolution scheme (e. g., First-UIP). */
 };
 
 //! Parameter-Object for configuring a solver.
@@ -366,16 +375,22 @@ struct ContextParams {
 		share_all     = 3, /*!< Share all constraints.                                    */
 		share_auto    = 4, /*!< Use share_no or share_all depending on number of solvers. */
 	};
-	ContextParams() : shareMode(share_auto), stats(0), shortMode(short_implicit), seed(1), hasConfig(0), cliConfig(0), cliId(0), cliMode(0) {}
+	ContextParams() : shareMode(share_auto), stats(0), shortMode(short_implicit), seed(1), hasConfig(0), logLearnts(0), cliConfig(0), cliId(0), cliMode(0), loggedLearntLimit(std::numeric_limits<decltype(loggedLearntLimit)>::max()) {}
 	SatPreParams satPre;        /*!< Preprocessing options.                    */
+	//----- 8 bit ------------
 	uint8        shareMode : 3; /*!< Physical sharing mode (one of ShareMode). */
 	uint8        stats     : 2; /*!< See SharedContext::enableStats().         */
 	uint8        shortMode : 1; /*!< One of ShortMode.                         */
 	uint8        seed      : 1; /*!< Apply new seed when adding solvers.       */
 	uint8        hasConfig : 1; /*!< Reserved for command-line interface.      */
+	//----- 8 bit ------------
+	uint8        reserved  : 7;
+	uint8        logLearnts: 1; /*!< Whether or not to log learnt conflicts.   */
+	//------------------------
 	uint8        cliConfig;     /*!< Reserved for command-line interface.      */
 	uint8        cliId;         /*!< Reserved for command-line interface.      */
 	uint8        cliMode;       /*!< Reserved for command-line interface.      */
+	uint32       loggedLearntLimit;   /*!< Stop solving after having logged <n> constraints */
 };
 
 //! Interface for configuring a SharedContext object and its associated solvers.

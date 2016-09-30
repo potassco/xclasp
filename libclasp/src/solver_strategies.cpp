@@ -27,7 +27,7 @@ namespace Clasp {
 // SolverStrategies / SolverParams
 /////////////////////////////////////////////////////////////////////////////////////////
 SolverStrategies::SolverStrategies() {
-	struct X { uint32 z[2]; };
+	struct X { uint32 z[3]; };
 	static_assert(sizeof(SolverStrategies) == sizeof(X), "Unsupported Padding");
 	std::memset(this, 0, sizeof(SolverStrategies));
 	ccMinAntes = all_antes;
@@ -38,6 +38,7 @@ void SolverStrategies::prepare() {
 	if (search == SolverStrategies::no_learning) {
 		compress    = 0;
 		saveProgress= 0;
+		resScheme   = 0;
 		reverseArcs = 0;
 		otfs        = 0;
 		updateLbd   = 0;
@@ -46,7 +47,7 @@ void SolverStrategies::prepare() {
 	}
 }
 SolverParams::SolverParams() {
-	struct X { uint32 strat[2]; uint32 self[3]; };
+	struct X { uint32 strat[3]; uint32 self[3]; };
 	static_assert(sizeof(SolverParams) == sizeof(X), "Unsupported Padding");
 	std::memset((&seed)+1, 0, sizeof(uint32)*2);
 	seed     = RNG().seed();

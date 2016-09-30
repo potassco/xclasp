@@ -93,6 +93,8 @@ OPTION(sat_prepro    , "!,@1", ARG(implicit("2")), "Run SatELite-like preprocess
        "        <x5>  : Set clause limit to <x5>*1000      [4000]", FUN(str) {\
        SatPreParams arg; \
        return stringTo(str, arg | off) && (SELF.satPre = arg, true);}, TO_STR_IF(SELF.satPre.type, SELF.satPre))
+OPTION(log_learnts, ",@1", ARG(flag()), "Log learnt conflicts to the command line", STORE_FLAG(SELF.logLearnts), toString(SELF.logLearnts))
+OPTION(logged_learnt_limit, "", ARG(arg("<n>")), "Stop solving after having logged <n> constraints", STORE_OR_FILL(SELF.loggedLearntLimit), toString(SELF.loggedLearntLimit))
 GROUP_END(SELF)
 #undef CLASP_CONTEXT_OPTIONS
 #undef SELF
@@ -177,6 +179,16 @@ OPTION(strengthen    , "!"  , ARG(arg("<X>"), DEFINE_ENUM_MAPPING(SolverStrategi
 OPTION(otfs        , ""   , ARG(implicit("1")->arg("{0..2}")), "Enable {1=partial|2=full} on-the-fly subsumption", STORE_LEQ(SELF.otfs, 2u), toString(SELF.otfs))
 OPTION(update_lbd  , ",@2", ARG(implicit("1")->arg("{0..3}")), "Update LBDs of learnt nogoods {1=<|2=strict<|3=+1<}", STORE_LEQ(SELF.updateLbd, 3u),toString(SELF.updateLbd))
 OPTION(update_act  , ",@2", ARG(flag()), "Enable LBD-based activity bumping", STORE_FLAG(SELF.bumpVarAct), toString(SELF.bumpVarAct))
+OPTION(resolution_scheme, "", ARG(arg("<X>"), DEFINE_ENUM_MAPPING(SolverStrategies::ResScheme, \
+	   MAP("first-uip", SolverStrategies::res_first_uip), MAP("decision", SolverStrategies::res_decision), \
+	   MAP("named", SolverStrategies::res_named))), \
+	   "Select the resolution scheme of the conflict analysis.\n" \
+	   "      %A: {first-uip, decision, named}\n" \
+	   "        first-uip: Resolve until the first UIP\n" \
+	   "        decision : Resolve until the decision literal of each decision level\n" \
+	   "        named    : Resolve until the first named UIP of each decision level", \
+	   FUN(str) {SolverStrategies::ResScheme arg; return stringTo(str, arg) && SET(SELF.resScheme, (uint32)arg);},\
+	   toString(static_cast<SolverStrategies::ResScheme>(SELF.resScheme)))
 OPTION(reverse_arcs, ""   , ARG(implicit("1")->arg("{0..3}")), "Enable ManySAT-like inverse-arc learning", STORE_LEQ(SELF.reverseArcs, 3u), toString(SELF.reverseArcs))
 OPTION(contraction , "!"  , NO_ARG, "Configure handling of long learnt nogoods\n"
        "      %A: <n>[,<rep>]\n"\
