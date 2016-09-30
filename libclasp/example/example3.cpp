@@ -41,10 +41,7 @@ void example3() {
 
 	// See example2()
 	Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config);
-	asp.setAtomName(1, "a");
-	asp.setAtomName(2, "b");
-	asp.startRule(Clasp::Asp::BASICRULE).addHead(1).addToBody(2, false).endRule();
-	asp.startRule(Clasp::Asp::BASICRULE).addHead(2).addToBody(1, false).endRule();
+	addSimpleProgram(asp);
 	
 	// We are done with problem setup. 
 	// Prepare the problem for solving.
@@ -54,7 +51,7 @@ void example3() {
 	Clasp::ClaspFacade::AsyncResult it = libclasp.startSolveAsync();
 	// Get models one by one until iterator is exhausted.
 	while (!it.end()) {
-		printModel(libclasp.ctx.symbolTable(), it.model());
+		printModel(libclasp.ctx.output, it.model());
 		// Advance iterator to next model.
 		it.next();
 	}

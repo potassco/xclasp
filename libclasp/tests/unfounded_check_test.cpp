@@ -18,8 +18,9 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
 #include "test.h"
+#include "lpcompare.h"
 #include <clasp/unfounded_check.h>
-#include <clasp/program_builder.h>
+#include <clasp/logic_program.h>
 #include <clasp/clause.h>
 #include <memory>
 
@@ -51,16 +52,18 @@ namespace Clasp { namespace Test {
 	CPPUNIT_TEST(testDetachRemovesWatches);
 
 	CPPUNIT_TEST(testApproxUfs);
+	
+	CPPUNIT_TEST(testWeightReason);
+	CPPUNIT_TEST(testCardExtSet);
+	CPPUNIT_TEST(testCardNoSimp);
 	CPPUNIT_TEST_SUITE_END(); 
 public:
 	class WrapDefaultUnfoundedCheck : public DefaultUnfoundedCheck {
 	public:
+		explicit WrapDefaultUnfoundedCheck(Asp::PrgDepGraph& g) : DefaultUnfoundedCheck(g) {}
 		bool propagate(Solver& s) { return DefaultUnfoundedCheck::propagateFixpoint(s, 0); }
 	};
 	UnfoundedCheckTest() : ufs(0) { }
-	void setUp() { 
-		ufs   = new WrapDefaultUnfoundedCheck();
-	}
 	void tearDown() {
 		ufs   = 0;
 	}
@@ -74,7 +77,7 @@ public:
 	
 	void testAlternativeSourceNotUnfounded() {
 		setupSimpleProgram();
-		solver().assume( ctx.symbolTable()[6].lit );
+		solver().assume( index[6] );
 		solver().propagateUntil(ufs.get());
 		uint32 old = solver().numAssignedVars();
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()));
@@ -83,26 +86,22 @@ public:
 	
 	void testOnlyOneSourceUnfoundedIfMinus() {
 		setupSimpleProgram();
-		solver().assume( ctx.symbolTable()[6].lit );
-		solver().assume( ctx.symbolTable()[5].lit );
+		solver().assume( index[6] );
+		solver().assume( index[5] );
 		solver().propagateUntil(ufs.get());
 		uint32 old = solver().numAssignedVars();
 		uint32 oldC = ctx.numConstraints();
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()));
 		CPPUNIT_ASSERT(old < solver().numAssignedVars());
-		CPPUNIT_ASSERT(solver().isFalse(ctx.symbolTable()[4].lit));
-		CPPUNIT_ASSERT(solver().isFalse(ctx.symbolTable()[1].lit));
-		CPPUNIT_ASSERT(!solver().isFalse(ctx.symbolTable()[2].lit));
+		CPPUNIT_ASSERT(solver().isFalse(index[4]));
+		CPPUNIT_ASSERT(solver().isFalse(index[1]));
+		CPPUNIT_ASSERT(!solver().isFalse(index[2]));
 		CPPUNIT_ASSERT(oldC+1 == ctx.numConstraints() + ctx.numLearntShort());
 	}
 	
 	void testWithSimpleCardinalityConstraint() {
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(CHOICERULE).addHead(2).endRule()
-			.startRule(CONSTRAINTRULE, 1).addHead(1).addToBody(1, true).addToBody(2,true).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
+		lpAdd(lp.start(ctx), "{x2}. x1 :- 1 {x1, x2}.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
 		attachUfs();
 		
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
@@ -110,37 +109,34 @@ public:
 		CPPUNIT_ASSERT_EQUAL(0u, solver().numAssignedVars());
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()) );
 		CPPUNIT_ASSERT_EQUAL(0u, solver().numAssignedVars());
-		CPPUNIT_ASSERT_EQUAL(true, solver().assume(~ctx.symbolTable()[2].lit));
+		CPPUNIT_ASSERT_EQUAL(true, solver().assume(~lp.getLiteral(2)));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 		CPPUNIT_ASSERT_EQUAL(1u, solver().numAssignedVars());
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()) );
 		CPPUNIT_ASSERT_EQUAL(2u, solver().numAssignedVars());
 		LitVec r;
-		solver().reason(~ctx.symbolTable()[1].lit, r);
+		solver().reason(~lp.getLiteral(1), r);
 		CPPUNIT_ASSERT(1 == r.size());
-		CPPUNIT_ASSERT(r[0] == ~ctx.symbolTable()[2].lit);
+		CPPUNIT_ASSERT(r[0] == ~lp.getLiteral(2));
 	}
 	void testWithSimpleWeightConstraint() {
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c")
-			.startRule(CHOICERULE).addHead(2).addHead(3).endRule()
-			.startRule(WEIGHTRULE, 2).addHead(1).addToBody(1, true, 2).addToBody(2,true, 2).addToBody(3, true, 1).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
+		lpAdd(lp.start(ctx), "{x2;x3}. x1 :- 2 {x1 = 2, x2 = 2, x3}.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
 		attachUfs();
+		ufs->setReasonStrategy(DefaultUnfoundedCheck::only_reason);
 		
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 		CPPUNIT_ASSERT_EQUAL(3u, solver().numVars());
 		CPPUNIT_ASSERT_EQUAL(0u, solver().numAssignedVars());
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()) );
 		CPPUNIT_ASSERT_EQUAL(0u, solver().numAssignedVars());
-		CPPUNIT_ASSERT_EQUAL(true, solver().assume(~ctx.symbolTable()[3].lit));
+		CPPUNIT_ASSERT_EQUAL(true, solver().assume(~lp.getLiteral(3)));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 		CPPUNIT_ASSERT_EQUAL(1u, solver().numAssignedVars());
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()) );
 		CPPUNIT_ASSERT_EQUAL(1u, solver().numAssignedVars());
 
-		CPPUNIT_ASSERT_EQUAL(true, solver().assume(~ctx.symbolTable()[2].lit));
+		CPPUNIT_ASSERT_EQUAL(true, solver().assume(~lp.getLiteral(2)));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 		CPPUNIT_ASSERT_EQUAL(2u, solver().numAssignedVars());
 
@@ -148,287 +144,244 @@ public:
 		CPPUNIT_ASSERT_EQUAL(3u, solver().numAssignedVars());
 		
 		LitVec r;
-		solver().reason(~ctx.symbolTable()[1].lit, r);
-		CPPUNIT_ASSERT(2 == r.size());
-		CPPUNIT_ASSERT(r[0] == ~ctx.symbolTable()[2].lit);
-		CPPUNIT_ASSERT(r[1] == ~ctx.symbolTable()[3].lit);
+		solver().reason(~lp.getLiteral(1), r);
+		CPPUNIT_ASSERT(std::find(r.begin(), r.end(), ~lp.getLiteral(2)) != r.end());
 
 		solver().undoUntil(0);
-		CPPUNIT_ASSERT_EQUAL(true, solver().assume(~ctx.symbolTable()[2].lit));
+		CPPUNIT_ASSERT_EQUAL(true, solver().assume(~lp.getLiteral(2)));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 		CPPUNIT_ASSERT_EQUAL(1u, solver().numAssignedVars());
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()) );
 		CPPUNIT_ASSERT_EQUAL(2u, solver().numAssignedVars());
 		r.clear();
-		solver().reason(~ctx.symbolTable()[1].lit, r);
+		solver().reason(~lp.getLiteral(1), r);
 		CPPUNIT_ASSERT(1 == r.size());
-		CPPUNIT_ASSERT(r[0] == ~ctx.symbolTable()[2].lit);
+		CPPUNIT_ASSERT(r[0] == ~lp.getLiteral(2));
 	}
 	
 	void testNtExtendedBug() {
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c").setAtomName(4, "t").setAtomName(5, "x")
-			.startRule(CHOICERULE).addHead(1).addHead(2).addHead(3).endRule() // {a,b,c}.
-			.startRule(CONSTRAINTRULE, 2).addHead(4).addToBody(2, true).addToBody(4, true).addToBody(5,true).endRule()
-			.startRule().addHead(5).addToBody(4,true).addToBody(3,true).endRule()
-			.startRule().addHead(5).addToBody(1,true).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
+		lpAdd(lp.start(ctx),
+			"{x1;x2;x3}.\n"
+			"x4 :- 2 {x2, x4, x5}.\n"
+			"x5 :- x4, x3.\n"
+			"x5 :- x1.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
 		attachUfs();
 		
-		// T: {t,c}
+		// T: {x4,x3}
 		solver().assume(Literal(6, false));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()));
-		solver().assume(~ctx.symbolTable()[1].lit);
+		solver().assume(~lp.getLiteral(1));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
-		CPPUNIT_ASSERT_EQUAL(false, ufs->propagate(solver()));  // {x, t} are unfounded!
+		CPPUNIT_ASSERT_EQUAL(false, ufs->propagate(solver()));  // {x4, x5} are unfounded!
 		
 		solver().undoUntil(0);
 		ufs->reset();
 
-		// F: {t,c}
+		// F: {x4,x3}
 		solver().assume(Literal(6, true));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
-		// F: a
-		solver().assume(~ctx.symbolTable()[1].lit);
+		// F: x1
+		solver().assume(~lp.getLiteral(1));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
-		// x is false because both of its bodies are false
-		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(ctx.symbolTable()[5].lit));
+		// x5 is false because both of its bodies are false
+		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(lp.getLiteral(5)));
 	
-		// t is now unfounded but its defining body is not
+		// x4 is now unfounded but its defining body is not
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()));
-		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(ctx.symbolTable()[4].lit));
+		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(lp.getLiteral(4)));
 		LitVec r;
-		solver().reason(~ctx.symbolTable()[4].lit, r);
-		CPPUNIT_ASSERT(r.size() == 1 && r[0] == ~ctx.symbolTable()[5].lit);
+		solver().reason(~lp.getLiteral(4), r);
+		CPPUNIT_ASSERT(r.size() == 1 && r[0] == ~lp.getLiteral(5));
 	}
 	
 	void testNtExtendedFalse() {
-		// {z}.
-		// r :- 2 {x, y, s}
-		// s :- r, z.
-		// r :- s, z.
-		// x :- not z.
-		// y :- not z.
-		builder.start(ctx, LogicProgram::AspOptions().noEq())
-			.setAtomName(1, "x").setAtomName(2, "y").setAtomName(3, "z").setAtomName(4, "r").setAtomName(5, "s")
-			.startRule(CHOICERULE).addHead(3).endRule() // {z}.
-			.startRule().addHead(1).addToBody(3,false).endRule()
-			.startRule().addHead(2).addToBody(3,false).endRule()
-			.startRule(CONSTRAINTRULE, 2).addHead(4).addToBody(1, true).addToBody(2, true).addToBody(5,true).endRule()
-			.startRule().addHead(5).addToBody(4,true).addToBody(3,true).endRule()
-			.startRule().addHead(4).addToBody(5,true).addToBody(3,true).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().noEq()),
+			"{x3}.\n"
+			"x4 :- 2 {x1, x2, x5}.\n"
+			"x5 :- x4, x3.\n"
+			"x4 :- x5, x3.\n"
+			"x1 :- not x3.\n"
+			"x2 :- not x3.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
 		attachUfs();
 		
-		solver().assume(ctx.symbolTable()[3].lit);
+		solver().assume(lp.getLiteral(3));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()));
 		CPPUNIT_ASSERT(solver().numVars() == solver().numAssignedVars());
-		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(ctx.symbolTable()[4].lit));
-		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(ctx.symbolTable()[5].lit));
+		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(lp.getLiteral(4)));
+		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(lp.getLiteral(5)));
 
 		solver().backtrack();
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()));
 		CPPUNIT_ASSERT(solver().numVars() == solver().numAssignedVars());
-		CPPUNIT_ASSERT_EQUAL(true, solver().isTrue(ctx.symbolTable()[4].lit));
-		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(ctx.symbolTable()[5].lit));
+		CPPUNIT_ASSERT_EQUAL(true, solver().isTrue(lp.getLiteral(4)));
+		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(lp.getLiteral(5)));
 	}
 
 	void testDependentExtReason() {
-		// {z, q, r}.
-		// x :- not q.
-		// x :- 2 {x, y, z}.
-		// x :- y, z.
-		// y :- x, r.
-		builder.start(ctx, LogicProgram::AspOptions().noEq())
-			.setAtomName(1, "x").setAtomName(2, "y").setAtomName(3, "z").setAtomName(4, "q").setAtomName(5, "r")
-			.startRule(CHOICERULE).addHead(3).addHead(4).addHead(5).endRule()
-			.startRule().addHead(1).addToBody(4,false).endRule()
-			.startRule(CONSTRAINTRULE, 2).addHead(1).addToBody(1, true).addToBody(2, true).addToBody(3, true).endRule()
-			.startRule().addHead(1).addToBody(2,true).addToBody(3, true).endRule()
-			.startRule().addHead(2).addToBody(1,true).addToBody(5, true).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().noEq()),
+			"{x3, x4, x5}.\n"
+			"x1 :- not x4.\n"
+			"x1 :- 2 {x1, x2, x3}.\n"
+			"x1 :- x2, x3.\n"
+			"x2 :- x1, x5.");
+		
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
 		attachUfs();
 		
-		// assume ~B1, where B1 = 2 {x, y, z}
-		const SharedDependencyGraph::AtomNode& a = ufs->graph()->getAtom(builder.getAtom(1)->id());
-		Literal x = ufs->graph()->getBody(a.body(1)).lit;
+		// assume ~B1, where B1 = 2 {x1, x2, x3}
+		const Asp::PrgDepGraph::AtomNode& a = ufs->graph()->getAtom(lp.getAtom(1)->id());
+		Literal x1 = ufs->graph()->getBody(a.body(1)).lit;
 
-		solver().assume(~x);
+		solver().assume(~x1);
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()) && ufs->propagate(solver()));
-		CPPUNIT_ASSERT_EQUAL(value_free, solver().value(ctx.symbolTable()[1].lit.var()));
-		CPPUNIT_ASSERT_EQUAL(value_free, solver().value(ctx.symbolTable()[2].lit.var()));
+		CPPUNIT_ASSERT_EQUAL(value_free, solver().value(lp.getLiteral(1).var()));
+		CPPUNIT_ASSERT_EQUAL(value_free, solver().value(lp.getLiteral(2).var()));
 		// B1
 		CPPUNIT_ASSERT_EQUAL(1u, solver().numAssignedVars());
 		
-		// assume q
-		solver().assume(ctx.symbolTable()[4].lit);
+		// assume x4
+		solver().assume(lp.getLiteral(4));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
-		// B1 + q (hence {not q})
+		// B1 + x4 (hence {not x4})
 		CPPUNIT_ASSERT_EQUAL(2u, solver().numAssignedVars());
 
-		// U = {x, y}.
+		// U = {x1, x2}.
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()));
-		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(ctx.symbolTable()[1].lit));
-		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(ctx.symbolTable()[2].lit));
+		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(lp.getLiteral(1)));
+		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(lp.getLiteral(2)));
 		Literal extBody = ufs->graph()->getBody(a.body(0)).lit;
 		LitVec r;
-		solver().reason(~ctx.symbolTable()[1].lit, r);
+		solver().reason(~lp.getLiteral(1), r);
 		CPPUNIT_ASSERT(r.size() == 1u && r[0] == ~extBody);
 	}
 
 	void testEqBodyDiffType() { 
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c").setAtomName(4, "x").setAtomName(5,"y")
-			.startRule(CHOICERULE).addHead(1).addHead(4).addHead(5).endRule()
-			.startRule(CHOICERULE).addHead(2).addToBody(1,true).endRule()
-			.startRule().addHead(3).addToBody(1,true).endRule()
-			.startRule().addHead(2).addToBody(3,true).addToBody(4, true).endRule()
-			.startRule().addHead(3).addToBody(2,true).addToBody(5,true).endRule()
-		.endProgram();
-		CPPUNIT_ASSERT(builder.stats.sccs == 1);
+		lpAdd(lp.start(ctx),
+			"{x1; x4; x5}.\n"
+			"{x2} :- x1.\n"
+			"x3 :- x1.\n"
+			"x2 :- x3, x4.\n"
+			"x3 :- x2, x5.");
+		lp.endProgram();
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
 		attachUfs();
 		
-		solver().assume(~ctx.symbolTable()[1].lit);
+		solver().assume(~lp.getLiteral(1));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()));
-		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(ctx.symbolTable()[2].lit));
-		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(ctx.symbolTable()[3].lit));
+		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(lp.getLiteral(2)));
+		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(lp.getLiteral(3)));
 	}
 
 	void testChoiceCardInterplay() {  
-		builder.start(ctx, LogicProgram::AspOptions().noEq())
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c").setAtomName(4, "x")
-			.startRule(CHOICERULE).addHead(4).endRule() // {x}.
-			.startRule(CHOICERULE).addHead(1).addToBody(4, true).endRule()  // {a} :- x.
-			.startRule(CONSTRAINTRULE,1).addHead(2).addToBody(1, true).addToBody(3, true).endRule() // b :- 1{a,c}
-			.startRule().addHead(3).addToBody(2,true).endRule() // c :- b.
-			.startRule(CHOICERULE).addHead(1).addToBody(3,true).endRule() // {a} :- c.
-		.endProgram();
-		CPPUNIT_ASSERT(builder.stats.sccs == 1);
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().noEq()),
+			"{x4}.\n"
+			"{x1} :- x4.\n"
+			"x2 :- 1 {x1, x3}.\n"
+			"x3 :- x2.\n"
+			"{x1} :- x3.");
+		lp.endProgram();
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
 		attachUfs();
 		
-		solver().assume(~ctx.symbolTable()[1].lit);
+		solver().assume(~lp.getLiteral(1));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()));
-		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(ctx.symbolTable()[2].lit));
-		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(ctx.symbolTable()[3].lit));
+		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(lp.getLiteral(2)));
+		CPPUNIT_ASSERT_EQUAL(true, solver().isFalse(lp.getLiteral(3)));
 	}
 
 	void testCardInterplayOnBT() {  
-		builder.start(ctx, LogicProgram::AspOptions().noEq())
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c").setAtomName(4, "d").setAtomName(5,"z")
-			.startRule(CHOICERULE).addHead(1).addHead(5).endRule()                                  // {a,z}.
-			.startRule(CONSTRAINTRULE,1).addHead(2).addToBody(1, true).addToBody(3, true).endRule() // b :- 1{a,c}
-			.startRule(BASICRULE).addHead(2).addToBody(4, true).endRule()                           // b :- d.
-			.startRule(BASICRULE).addHead(4).addToBody(2, true).endRule()                           // d :- b.
-			.startRule(BASICRULE).addHead(4).addToBody(5, true).endRule()                           // d :- z.
-			.startRule(BASICRULE).addHead(3).addToBody(2,true).addToBody(4,true).endRule()          // c :- b,d.      
-		.endProgram();
-		CPPUNIT_ASSERT(builder.stats.sccs == 1);
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().noEq()),
+			"{x1;x5}.\n"
+			"x2 :- 1 {x1, x3}.\n"
+			"x2 :- x4.\n"
+			"x4 :- x2.\n"
+			"x4 :- x5.\n"
+			"x3 :- x2, x4.");
+		lp.endProgram();
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
 		attachUfs();
 		
-		solver().assume(~ctx.symbolTable()[1].lit);
+		solver().assume(~lp.getLiteral(1));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()) && ufs->propagate(solver()));
-		CPPUNIT_ASSERT_EQUAL(false, solver().isFalse(ctx.symbolTable()[2].lit));
-		CPPUNIT_ASSERT_EQUAL(false, solver().isFalse(ctx.symbolTable()[3].lit));
+		CPPUNIT_ASSERT_EQUAL(false, solver().isFalse(lp.getLiteral(2)));
+		CPPUNIT_ASSERT_EQUAL(false, solver().isFalse(lp.getLiteral(3)));
 		solver().undoUntil(0);
 		
-		solver().assume(~ctx.symbolTable()[5].lit);
+		solver().assume(~lp.getLiteral(5));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()) && ufs->propagate(solver()));
-		CPPUNIT_ASSERT_EQUAL(false, solver().isFalse(ctx.symbolTable()[2].lit));
-		CPPUNIT_ASSERT_EQUAL(false, solver().isFalse(ctx.symbolTable()[3].lit));
+		CPPUNIT_ASSERT_EQUAL(false, solver().isFalse(lp.getLiteral(2)));
+		CPPUNIT_ASSERT_EQUAL(false, solver().isFalse(lp.getLiteral(3)));
 	}
 	
 	void testInitNoSource() {
-		builder.start(ctx, LogicProgram::AspOptions().noEq())
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "x")
-			.startRule(CHOICERULE).addHead(3).endRule()                                  // {x}.
-			.startRule(CHOICERULE).addHead(1).addHead(2).addToBody(3, true).endRule()    // {a,b} :- x.
-			.startRule(BASICRULE).addHead(1).addToBody(2, true).endRule()                // a :- b.
-			.startRule(BASICRULE).addHead(2).addToBody(1, true).endRule()                // b :- a.
-		.endProgram();
-		CPPUNIT_ASSERT(builder.stats.sccs == 1);
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().noEq()),
+			"{x3}.\n"
+			"{x1;x2} :- x3.\n"
+			"x1 :- x2.\n"
+			"x2 :- x1.\n");
+		lp.endProgram();
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
 		
-		solver().force(~ctx.symbolTable()[3].lit);
+		solver().force(~lp.getLiteral(3));
 		attachUfs();
-		CPPUNIT_ASSERT(solver().isFalse(ctx.symbolTable()[1].lit));
+		CPPUNIT_ASSERT(solver().isFalse(lp.getLiteral(1)));
 	}
 
 	void testIncrementalUfs() {
-		builder.start(ctx, LogicProgram::AspOptions().noEq());
-		// I1:
-		// a :- not b.
-		// b :- not a.
-		// freeze(c).
-		builder.updateProgram();
-		builder.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c")
-			.startRule().addHead(1).addToBody(2, false).endRule()
-			.startRule().addHead(2).addToBody(1, false).endRule()
-			.freeze(3)
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram() && ctx.endInit());
+		lp.start(ctx, LogicProgram::AspOptions().noEq());
+		lp.updateProgram();
+		lpAdd(lp,
+			"% I1:\n"
+			"x1 :- not x2.\n"
+			"x2 :- not x1.\n"
+			"#external x3.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
 		CPPUNIT_ASSERT(ctx.sccGraph.get() == 0);
-		
-		// I2:
-		// {c, z}
-		// x :- not c.
-		// x :- y, z.
-		// y :- x, z.
-		builder.updateProgram();
-		builder.setAtomName(4, "x").setAtomName(5, "y").setAtomName(6, "z")
-			.startRule(CHOICERULE).addHead(3).addHead(6).endRule()
-			.startRule().addHead(4).addToBody(3, false).endRule()
-			.startRule().addHead(4).addToBody(5, true).addToBody(6, true).endRule()
-			.startRule().addHead(5).addToBody(4, true).addToBody(6, true).endRule()
-			.unfreeze(3)
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
+		lp.updateProgram();
+		lpAdd(lp,
+			"% I2:\n"
+			"{x3;x6}.\n"
+			"x4 :- not x3.\n"
+			"x4 :- x5, x6.\n"
+			"x5 :- x4, x6.\n"
+			"#external x3. [release]");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
 		CPPUNIT_ASSERT(6u == ctx.sccGraph.get()->nodes());
-		CPPUNIT_ASSERT(1 == builder.stats.sccs);
+		CPPUNIT_ASSERT(1 == lp.stats.sccs);
 		attachUfs();
 		CPPUNIT_ASSERT(6u == ufs->nodes());
 
-		// I3:
-		// a :- x, not r.
-		// r :- not a.
-		// a :- b.
-		// b :- a, not z.
-		builder.updateProgram();
-		builder.setAtomName(7, "a").setAtomName(8, "b").setAtomName(9, "r")
-			.startRule().addHead(7).addToBody(4, true).addToBody(9, false).endRule()
-			.startRule().addHead(9).addToBody(7, false).endRule()
-			.startRule().addHead(7).addToBody(8, true).endRule()
-			.startRule().addHead(8).addToBody(7, true).addToBody(6, false).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
+		lp.updateProgram();
+		lpAdd(lp,
+			"% I3:\n"
+			"x7 :- x4, not x9.\n"
+			"x9 :- not x7.\n"
+			"x7 :- x8.\n"
+			"x8 :- x7, not x6.\n");
+		
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
 		CPPUNIT_ASSERT(11u == ctx.sccGraph.get()->nodes());
-		CPPUNIT_ASSERT(1 == builder.stats.sccs);
+		CPPUNIT_ASSERT(1 == lp.stats.sccs);
 		ctx.endInit();
 		CPPUNIT_ASSERT(11u == ufs->nodes());
-		CPPUNIT_ASSERT(builder.getAtom(7)->scc() != builder.getAtom(4)->scc());
+		CPPUNIT_ASSERT(lp.getAtom(7)->scc() != lp.getAtom(4)->scc());
 	}
 
 	void testInitialStopConflict() {
-		builder.start(ctx);
-		// I1:
-		// {x,y}.
-		// a :- {x, y}.
-		// a :- b,y.
-		// b :- a,y.
-		builder.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "x").setAtomName(4, "y")
-			.startRule(CHOICERULE).addHead(3).addHead(4).endRule()
-			.startRule().addHead(1).addToBody(3, true).addToBody(4, true).endRule()
-			.startRule().addHead(1).addToBody(2, true).addToBody(4, true).endRule()
-			.startRule().addHead(2).addToBody(1, true).addToBody(4, true).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
-		CPPUNIT_ASSERT(builder.stats.sccs == 1);
+		lpAdd(lp.start(ctx),
+			"{x3;x4}.\n"
+			"x1 :- x3, x4.\n"
+			"x1 :- x2, x4.\n"
+			"x2 :- x1, x4.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
 		struct M : PostPropagator {			
 			uint32 priority() const { return priority_reserved_msg; }
 			bool propagateFixpoint(Solver& s, PostPropagator*) {
@@ -437,57 +390,50 @@ public:
 			}
 		} m;
 		solver().addPost(&m);
-		ctx.addUnary(~builder.getAtom(3)->literal());
+		ctx.addUnary(~lp.getLiteral(3));
 		attachUfs();
 		CPPUNIT_ASSERT(solver().hasStopConflict());
 		solver().removePost(&m);
 		solver().popRootLevel();
 		solver().propagate();
-		CPPUNIT_ASSERT(solver().isFalse(builder.getAtom(3)->literal()));
-		CPPUNIT_ASSERT(solver().isFalse(builder.getAtom(1)->literal()) && solver().isFalse(builder.getAtom(2)->literal()));
+		CPPUNIT_ASSERT(solver().isFalse(lp.getLiteral(3)));
+		CPPUNIT_ASSERT(solver().isFalse(lp.getLiteral(1)) && solver().isFalse(lp.getLiteral(2)));
 	}
 
 	void testIncrementalLearnFact() {
-		builder.start(ctx);
-		builder.update();
-		// I1:
-		// {x,y}.
-		// a :- {x, y}.
-		// a :- b,y.
-		// b :- a,y.
-		builder.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "x").setAtomName(4, "y")
-			.startRule(CHOICERULE).addHead(3).addHead(4).endRule()
-			.startRule().addHead(1).addToBody(3, true).addToBody(4, true).endRule()
-			.startRule().addHead(1).addToBody(2, true).addToBody(4, true).endRule()
-			.startRule().addHead(2).addToBody(1, true).addToBody(4, true).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
+		lp.start(ctx);
+		lp.update();
+		lpAdd(lp,
+			"{x3;x4}.\n"
+			"x1 :- x3, x4.\n"
+			"x1 :- x2, x4.\n"
+			"x2 :- x1, x4.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
 		attachUfs();
-		builder.update();
-		builder.endProgram();
-		ctx.addUnary(~builder.getAtom(3)->literal());
+		lp.update();
+		lp.endProgram();
+		ctx.addUnary(~lp.getLiteral(3));
 		CPPUNIT_ASSERT(solver().propagate());
 		CPPUNIT_ASSERT(ctx.endInit());
-		CPPUNIT_ASSERT(solver().isFalse(builder.getAtom(3)->literal()));
-		CPPUNIT_ASSERT(solver().isFalse(builder.getAtom(1)->literal()) && solver().isFalse(builder.getAtom(2)->literal()));
+		CPPUNIT_ASSERT(solver().isFalse(lp.getLiteral(3)));
+		CPPUNIT_ASSERT(solver().isFalse(lp.getLiteral(1)) && solver().isFalse(lp.getLiteral(2)));
 	}
 
 	void testDetachRemovesWatches() {
-		builder.start(ctx, LogicProgram::AspOptions().noEq())
-			.setAtomName(1, "x").setAtomName(2, "y").setAtomName(3, "z").setAtomName(4, "q").setAtomName(5, "r")
-			.startRule(CHOICERULE).addHead(3).addHead(4).addHead(5).endRule()
-			.startRule().addHead(1).addToBody(4,false).endRule()
-			.startRule(CONSTRAINTRULE, 2).addHead(1).addToBody(1, true).addToBody(2, true).addToBody(3, true).endRule()
-			.startRule().addHead(1).addToBody(2,true).addToBody(3, true).endRule()
-			.startRule().addHead(2).addToBody(1,true).addToBody(5, true).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().noEq()),
+			"{x3;x4;x5}.\n"
+			"x1 :- x4.\n"
+			"x1 :- 2 {x1, x2, x3}.\n"
+			"x1 :- x2, x3.\n"
+			"x2 :- x1, x5.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
 		ctx.endInit();
 		uint32 numW = 0;
 		for (uint32 i = 1; i <= solver().numVars(); ++i) {
 			numW += solver().numWatches(posLit(i));
 			numW += solver().numWatches(negLit(i));
 		}
+		ufs = new WrapDefaultUnfoundedCheck(*ctx.sccGraph);
 		solver().addPost(ufs.release());
 		ufs->destroy(&solver(), true);
 		CPPUNIT_ASSERT(!solver().getPost(PostPropagator::priority_reserved_ufs));
@@ -499,54 +445,165 @@ public:
 	}
 	
 	void testApproxUfs() {
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c").setAtomName(4, "d").setAtomName(5,"e")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule() // a | b.
-			.startRule(DISJUNCTIVERULE).addHead(3).addHead(4).endRule() // c | d.
-			.startRule(DISJUNCTIVERULE).addHead(3).addHead(5).addToBody(2, true).endRule() // c | e :- b.
-			.startRule(DISJUNCTIVERULE).addHead(2).addHead(4).addToBody(3, true).endRule() // b | d :- c.
-			.startRule().addHead(3).addToBody(4,true).addToBody(2, false).endRule() // c :- d, not b.
-			.startRule().addHead(3).addToBody(5,true).endRule()                     // c :- e.
-			.startRule().addHead(4).addToBody(5,true).addToBody(1, false).endRule() // d :- e, not a.
-			.startRule().addHead(5).addToBody(3,true).addToBody(4, true).endRule()  // e :- c, d.
-		.endProgram();
-		CPPUNIT_ASSERT(builder.stats.sccs == 1);
-		CPPUNIT_ASSERT(builder.getAtom(1)->scc() == PrgNode::noScc);
+		lpAdd(lp.start(ctx),
+			"a | b.\n"
+			"c | d.\n"
+			"c | e :- b.\n"
+			"b | d :- c.\n"
+			"c :- d, not b.\n"
+			"c :- e.\n"
+			"d :- e, not a.\n"
+			"e :- c, d.");
+		lp.endProgram();
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
+		CPPUNIT_ASSERT(lp.getAtom(1)->scc() == PrgNode::noScc);
 		CPPUNIT_ASSERT(5u == ctx.sccGraph.get()->numAtoms());
 		CPPUNIT_ASSERT(8u == ctx.sccGraph.get()->numBodies());
 		attachUfs();
-		CPPUNIT_ASSERT_EQUAL(true, solver().assume(ctx.symbolTable()[2].lit) && solver().propagate());
-		solver().assume(ctx.symbolTable()[3].lit);
+		CPPUNIT_ASSERT_EQUAL(true, solver().assume(lp.getLiteral(2)) && solver().propagate());
+		solver().assume(lp.getLiteral(3));
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 		
-		CPPUNIT_ASSERT(solver().value(ctx.symbolTable()[4].lit.var()) == value_free);
+		CPPUNIT_ASSERT(solver().value(lp.getLiteral(4).var()) == value_free);
 		CPPUNIT_ASSERT_EQUAL(true, ufs->propagate(solver()));
-#if defined(CLASP_ENABLE_PRAGMA_TODO)
-		CPPUNIT_ASSERT_MESSAGE("TODO: Implement approx. ufs!", solver().isFalse(ctx.symbolTable()[4].lit));
-#endif		
+		
+		CPPUNIT_ASSERT(solver().isFalse(lp.getLiteral(4)) || "TODO: Implement approx. ufs!");
+	}
+
+	void testWeightReason() {
+		lpAdd(lp.start(ctx),
+			"{x4;x5;x6;x7}.\n"
+			"x1 :- 2 {x2, x3 = 2, not x4}.\n"
+			"x2 :- x1, x5.\n"
+			"x3 :- x2, x6.\n"
+			"x3 :- x7.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
+		attachUfs();
+		ufs->setReasonStrategy(DefaultUnfoundedCheck::only_reason);
+		ctx.master()->assume(~lp.getLiteral(7)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(3)));
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(1)));
+		ctx.master()->undoUntil(0);
+
+		ctx.master()->assume(lp.getLiteral(4)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(ctx.master()->value(lp.getLiteral(1).var()) == value_free);
+		ctx.master()->assume(lp.getLiteral(5)) && ctx.master()->propagate();
+		ctx.master()->assume(lp.getLiteral(6)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(ctx.master()->numAssignedVars() == 3);
+		ctx.master()->assume(~lp.getLiteral(7)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(1)));
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(2)));
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(3)));
+
+		LitVec reason;
+		ctx.master()->reason(~lp.getLiteral(3), reason);
+		CPPUNIT_ASSERT(std::find(reason.begin(), reason.end(), ~lp.getLiteral(7)) != reason.end()); 
+		CPPUNIT_ASSERT(reason.size() == 1); 
+	}
+
+	void testCardExtSet() {
+		lpAdd(lp.start(ctx),
+			"{x4; x5; x6; x7; x8}.\n"
+			"c :- 2 {a, b, x4, x5}.\n"
+			"a :- c,x6.\n"
+			"b :- a,x7.\n"
+			"a :- x8.\n");
+		Var a = 1, b = 2, c = 3, x4 = 4, x5 = 5, x6 = 6, x7 = 7, x8 = 8;
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
+		attachUfs();
+		ufs->setReasonStrategy(DefaultUnfoundedCheck::only_reason);
+		Solver& solver = *ctx.master();
+		solver.undoUntil(0);
+		solver.assume(~lp.getLiteral(x4)) && solver.propagate();
+		solver.assume(~lp.getLiteral(x8)) && solver.propagate();
+		CPPUNIT_ASSERT(solver.isFalse(lp.getLiteral(a)));
+		CPPUNIT_ASSERT(solver.isFalse(lp.getLiteral(b)));
+		CPPUNIT_ASSERT(solver.isFalse(lp.getLiteral(c)));
+
+		solver.undoUntil(0);
+		solver.assume(~lp.getLiteral(x5)) && solver.propagate();
+		solver.assume(~lp.getLiteral(x8)) && solver.propagate();
+		CPPUNIT_ASSERT(solver.isFalse(lp.getLiteral(a)));
+		CPPUNIT_ASSERT(solver.isFalse(lp.getLiteral(b)));
+		CPPUNIT_ASSERT(solver.isFalse(lp.getLiteral(c)));
+		
+		solver.undoUntil(0);
+		solver.assume(~lp.getLiteral(x4)) && solver.propagate();
+		solver.assume(~lp.getLiteral(x5)) && solver.propagate();
+		CPPUNIT_ASSERT(solver.numAssignedVars() == 2);
+		
+		solver.assume(lp.getLiteral(x6)) && solver.propagate();
+		solver.assume(lp.getLiteral(x7)) && solver.propagate();
+		CPPUNIT_ASSERT(solver.numAssignedVars() == 4);
+		
+		ctx.master()->assume(~lp.getLiteral(x8)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(solver.isFalse(lp.getLiteral(a)));
+		CPPUNIT_ASSERT(solver.isFalse(lp.getLiteral(b)));
+		CPPUNIT_ASSERT(solver.isFalse(lp.getLiteral(c)));
+		
+		LitVec reason;
+		ctx.master()->reason(~lp.getLiteral(a), reason);
+		bool hasP = std::find(reason.begin(), reason.end(), ~lp.getLiteral(x4)) != reason.end();
+		bool hasQ = std::find(reason.begin(), reason.end(), ~lp.getLiteral(x5)) != reason.end();
+		bool hasT = std::find(reason.begin(), reason.end(), ~lp.getLiteral(x8)) != reason.end();
+		CPPUNIT_ASSERT((hasP ^ hasQ) == true && hasT);
+	}
+
+	void testCardNoSimp() {
+		lpAdd(lp.start(ctx),
+			"b :- 2 {a, c, d, not a}.\n"
+			"a :-b.\n"
+			"a :- x5.\n"
+			"{c;d;x5}.");
+		Var a = 1, d = 4, x5 = 5;
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
+		attachUfs();
+
+		ufs->setReasonStrategy(DefaultUnfoundedCheck::only_reason);
+		Solver& solver = *ctx.master();
+		
+		solver.assume(~lp.getLiteral(d)) && solver.propagate();
+		solver.assume(lp.getLiteral(a)) && solver.propagate();
+		
+		CPPUNIT_ASSERT(solver.assume(~lp.getLiteral(x5)) && solver.propagateUntil(ufs.get()));
+		CPPUNIT_ASSERT(!ufs->propagate(solver));
+		solver.resolveConflict();
+		CPPUNIT_ASSERT(solver.isTrue(lp.getLiteral(x5)));
+		LitVec r;
+		solver.reason(lp.getLiteral(x5), r);
+		CPPUNIT_ASSERT(r.size() == 2);
+		CPPUNIT_ASSERT(std::find(r.begin(), r.end(), ~lp.getLiteral(d)) != r.end());
+		CPPUNIT_ASSERT(std::find(r.begin(), r.end(), lp.getLiteral(a)) != r.end());
 	}
 private:
 	SharedContext ctx;
 	SingleOwnerPtr<WrapDefaultUnfoundedCheck> ufs;
-	LogicProgram builder;
+	LogicProgram lp;
+	LitVec index;
 	void attachUfs() {
-		solver().addPost(ufs.release());
+		if (ctx.sccGraph.get()) {
+			ufs = new WrapDefaultUnfoundedCheck(*ctx.sccGraph);
+			solver().addPost(ufs.release());
+		}
 		ctx.endInit();
 	}
 	void setupSimpleProgram() {
-		builder.startProgram(ctx);
-		builder
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c").setAtomName(4, "f")
-			.setAtomName(5, "x").setAtomName(6, "y").setAtomName(7, "z")
-			.startRule(CHOICERULE).addHead(5).addHead(6).addHead(7).addHead(3).endRule()
-			.startRule().addHead(2).addToBody(1, true).endRule()                    // b :- a.
-			.startRule().addHead(1).addToBody(2, true).addToBody(4, true).endRule() // a :- b,f.
-			.startRule().addHead(4).addToBody(1, true).addToBody(3, true).endRule() // f :- a,c.
-			.startRule().addHead(1).addToBody(5, false).endRule()                   // a :- not x.
-			.startRule().addHead(2).addToBody(7, false).endRule()                   // b :- not z.
-			.startRule().addHead(4).addToBody(6, false).endRule()                   // f :- not y.
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
+		lpAdd(lp.start(ctx),
+			"{x5;x6;x7;x3}.\n"
+			"x2 :- x1.\n"
+			"x1 :- x2, x4.\n"
+			"x4 :- x1, x3.\n"
+			"x1 :- not x5.\n"
+			"x2 :- not x7.\n"
+			"x4 :- not x6.\n");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		index.assign(1, lit_true());
+		for (Var v = 1; v <= lp.numAtoms(); ++v) {
+			index.push_back(lp.getLiteral(v));
+		}
 		attachUfs();
 		CPPUNIT_ASSERT_EQUAL(true, solver().propagateUntil(ufs.get()));
 	}

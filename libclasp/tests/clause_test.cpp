@@ -27,7 +27,6 @@
 #pragma once
 #endif
 
-
 namespace Clasp { namespace Test {
 
 class ClauseTest : public CppUnit::TestFixture {
@@ -92,16 +91,17 @@ class ClauseTest : public CppUnit::TestFixture {
 
 	CPPUNIT_TEST_SUITE_END(); 
 public:
+	typedef ConstraintInfo ClauseInfo;
 	ClauseTest() {
-		a1 = posLit(ctx.addVar(Var_t::atom_var));
-		a2 = posLit(ctx.addVar(Var_t::atom_var));
-		a3 = posLit(ctx.addVar(Var_t::atom_var));
-		b1 = posLit(ctx.addVar(Var_t::body_var));
-		b2 = posLit(ctx.addVar(Var_t::body_var));
-		b3 = posLit(ctx.addVar(Var_t::body_var));
+		a1 = posLit(ctx.addVar(Var_t::Atom));
+		a2 = posLit(ctx.addVar(Var_t::Atom));
+		a3 = posLit(ctx.addVar(Var_t::Atom));
+		b1 = posLit(ctx.addVar(Var_t::Body));
+		b2 = posLit(ctx.addVar(Var_t::Body));
+		b3 = posLit(ctx.addVar(Var_t::Body));
 
 		for (int i = 6; i < 15; ++i) {
-			ctx.addVar(Var_t::atom_var);
+			ctx.addVar(Var_t::Atom);
 		}
 		ctx.startAddConstraints(10);
 		solver = ctx.master();
@@ -110,18 +110,18 @@ public:
 		ClauseHead* cl1;
 		solver->add(cl1 = createClause(2,2));
 		CPPUNIT_ASSERT_EQUAL(2, countWatches(*solver, cl1, clLits) );
-		ClauseHead* cl2 = createClause(clLits, Constraint_t::learnt_conflict);
+		ClauseHead* cl2 = createClause(clLits, Constraint_t::Conflict);
 		solver->add(cl2);
 		CPPUNIT_ASSERT_EQUAL(2,  countWatches(*solver, cl2, clLits));
 	}
 
 	void testClauseTypes() {
 		Clause* cl1 = createClause(2, 2);
-		LearntConstraint* cl2 = createClause(clLits, ClauseInfo(Constraint_t::learnt_conflict));
-		LearntConstraint* cl3 = createClause(clLits, ClauseInfo(Constraint_t::learnt_loop));
-		CPPUNIT_ASSERT_EQUAL(Constraint_t::static_constraint, cl1->type());
-		CPPUNIT_ASSERT_EQUAL(Constraint_t::learnt_conflict, cl2->type());
-		CPPUNIT_ASSERT_EQUAL(Constraint_t::learnt_loop, cl3->type());
+		Constraint* cl2 = createClause(clLits, ClauseInfo(Constraint_t::Conflict));
+		Constraint* cl3 = createClause(clLits, ClauseInfo(Constraint_t::Loop));
+		CPPUNIT_ASSERT_EQUAL(Constraint_t::Static, cl1->type());
+		CPPUNIT_ASSERT_EQUAL(Constraint_t::Conflict, cl2->type());
+		CPPUNIT_ASSERT_EQUAL(Constraint_t::Loop, cl3->type());
 		cl1->destroy();
 		cl2->destroy();
 		cl3->destroy();
@@ -134,8 +134,8 @@ public:
 		lit.push_back(posLit(3));
 		lit.push_back(posLit(4));
 		uint32 exp = 258;
-		ClauseHead* cl1 = createClause(lit, ClauseInfo(Constraint_t::learnt_conflict).setActivity(exp));
-		ClauseHead* cl2 = createClause(lit, ClauseInfo(Constraint_t::learnt_loop).setActivity(exp));
+		ClauseHead* cl1 = createClause(lit, ClauseInfo(Constraint_t::Conflict).setActivity(exp));
+		ClauseHead* cl2 = createClause(lit, ClauseInfo(Constraint_t::Loop).setActivity(exp));
 		solver->add(cl1);
 		solver->add(cl2);
 		while ( exp != 0 ) {
@@ -206,7 +206,7 @@ public:
 		for (int i = 0; i != 100; ++i) {
 			SharedContext cc;
 			solver = cc.master();
-			for (int j = 0; j < 12; ++j) { cc.addVar(Var_t::atom_var); }
+			for (int j = 0; j < 12; ++j) { cc.addVar(Var_t::Atom); }
 			cc.startAddConstraints(1);
 			Clause* c;
 			solver->add( c = createRandomClause( (rand() % 10) + 2 ) );
@@ -220,19 +220,16 @@ public:
 		clLits.push_back(posLit(3));
 		clLits.push_back(posLit(4));
 		ctx.endInit();
-		ClauseHead* cl1 = createClause(clLits, ClauseInfo(Constraint_t::learnt_conflict));
+		ClauseHead* cl1 = createClause(clLits, ClauseInfo(Constraint_t::Conflict));
 		solver->addLearnt(cl1, (uint32)clLits.size());
 		solver->assume(~clLits[0]);
 		solver->propagate();
 		solver->assume(~clLits[1]);
 		solver->propagate();
 		solver->assume(~clLits[2]);
-		solver->propagate();
-		
-		CPPUNIT_ASSERT_EQUAL(true, solver->isTrue( clLits[3] ) );
 		uint32 a = cl1->activity().activity();
-		LitVec r;
-		solver->reason(clLits[3], r);
+		solver->force(~clLits[3], Antecedent(0));
+		CPPUNIT_ASSERT_EQUAL(false, solver->propagate());
 		CPPUNIT_ASSERT_EQUAL(a+1, cl1->activity().activity());
 	}
 
@@ -347,9 +344,9 @@ public:
 	}
 
 	void testStrengthenToUnary() {
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal y = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x = posLit(ctx.addVar( Var_t::Atom ));
+		Literal y = posLit(ctx.addVar( Var_t::Atom ));
 		ctx.startAddConstraints();
 		ctx.endInit();
 		Literal a = posLit(solver->pushTagVar(true));
@@ -359,7 +356,7 @@ public:
 		clLits.clear(); 
 		clLits.push_back(b);
 		clLits.push_back(~a);
-		ClauseInfo extra(Constraint_t::learnt_conflict); extra.setTagged(true);
+		ClauseInfo extra(Constraint_t::Conflict); extra.setTagged(true);
 		ClauseHead* c = ClauseCreator::create(*solver, clLits, 0, extra).local;
 		CPPUNIT_ASSERT(c->size() == 2);
 		CPPUNIT_ASSERT(solver->isTrue(b) && solver->reason(b).constraint() == c);
@@ -370,7 +367,7 @@ public:
 		CPPUNIT_ASSERT(solver->isTrue(b));
 		LitVec out;
 		solver->reason(b, out);
-		CPPUNIT_ASSERT(out.size() == 1 && out[0] == posLit(0));
+		CPPUNIT_ASSERT(out.size() == 1 && out[0] == lit_true());
 		solver->clearAssumptions();
 		CPPUNIT_ASSERT(solver->isTrue(b));
 	}
@@ -384,7 +381,7 @@ public:
 			lits.push_back(posLit(i));
 		}
 		solver->strategies().compress = 4;
-		ClauseHead* c = ClauseCreator::create(*solver, lits, 0, Constraint_t::learnt_conflict).local;
+		ClauseHead* c = ClauseCreator::create(*solver, lits, 0, Constraint_t::Conflict).local;
 		uint32 si = c->size();
 		c->strengthen(*solver, posLit(12));
 		solver->undoUntil(solver->decisionLevel()-1);
@@ -418,7 +415,7 @@ public:
 			solver->assume(negLit(8-i)) && solver->propagate();
 			clause.push_back(posLit(i));
 		}
-		ClauseHead* c = Clause::newContractedClause(*solver, ClauseRep::create(&clause[0], (uint32)clause.size(), ClauseInfo(Constraint_t::learnt_conflict)) , 5, true);
+		ClauseHead* c = Clause::newContractedClause(*solver, ClauseRep::create(&clause[0], (uint32)clause.size(), ClauseInfo(Constraint_t::Conflict)) , 5, true);
 		solver->addLearnt(c, 5);
 		uint32 si = c->size();
 		CPPUNIT_ASSERT(si == 5);
@@ -439,7 +436,7 @@ public:
 			solver->assume(negLit(8-i)) && solver->propagate();
 			clause.push_back(posLit(i));
 		}
-		ClauseRep   x = ClauseRep::create(&clause[0], (uint32)clause.size(), ClauseInfo(Constraint_t::learnt_conflict));
+		ClauseRep   x = ClauseRep::create(&clause[0], (uint32)clause.size(), ClauseInfo(Constraint_t::Conflict));
 		ClauseHead* c = Clause::newContractedClause(*solver, x, 4, false);
 		solver->addLearnt(c, 4);
 		CPPUNIT_ASSERT(c->size() == 4);
@@ -450,16 +447,16 @@ public:
 	}
 
 	void testStrengthenLocked() {
-		Var a = ctx.addVar( Var_t::atom_var );
-		Var b = ctx.addVar( Var_t::atom_var );
-		Var c = ctx.addVar( Var_t::atom_var );
+		Var a = ctx.addVar( Var_t::Atom );
+		Var b = ctx.addVar( Var_t::Atom );
+		Var c = ctx.addVar( Var_t::Atom );
 		ctx.startAddConstraints();
 		ctx.endInit();
 		Literal tag = posLit(solver->pushTagVar(true));
 		solver->assume(posLit(a)) && solver->propagate();
 		solver->assume(posLit(b)) && solver->propagate();
 		ClauseCreator cc(solver);
-		cc.start(Constraint_t::learnt_conflict).add(negLit(a)).add(negLit(b)).add(negLit(c)).add(~tag);
+		cc.start(Constraint_t::Conflict).add(negLit(a)).add(negLit(b)).add(negLit(c)).add(~tag);
 		ClauseHead* clause = cc.end().local;
 		CPPUNIT_ASSERT(clause->locked(*solver));
 		CPPUNIT_ASSERT(!clause->strengthen(*solver, ~tag).second);
@@ -472,10 +469,10 @@ public:
 	}
 
 	void testStrengthenLockedEarly() {
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal d = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
+		Literal d = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x = posLit(ctx.addVar( Var_t::Atom ));
 		ctx.startAddConstraints();
 		ctx.endInit();
 		Literal a = posLit(solver->pushTagVar(true));
@@ -485,25 +482,25 @@ public:
 		solver->setBacktrackLevel(solver->decisionLevel());
 		
 		ClauseCreator cc(solver);
-		cc.start(Constraint_t::learnt_conflict).add(~a).add(~b).add(~c).add(d);
+		cc.start(Constraint_t::Conflict).add(~a).add(~b).add(~c).add(d);
 		ClauseHead* clause = cc.end().local;
 		CPPUNIT_ASSERT(clause->locked(*solver));
 		bool remove = clause->strengthen(*solver, ~a).second;
 		solver->backtrack();
 		CPPUNIT_ASSERT(solver->isTrue(d));
-		CPPUNIT_ASSERT(!remove || solver->reason(d).type() != Antecedent::generic_constraint || solver->reason(d).constraint() != clause);
+		CPPUNIT_ASSERT(!remove || solver->reason(d).type() != Antecedent::Generic || solver->reason(d).constraint() != clause);
 	}
 
 	void testSimplifyTagged() {
-		Var a = ctx.addVar( Var_t::atom_var );
-		Var b = ctx.addVar( Var_t::atom_var );
-		Var c = ctx.addVar( Var_t::atom_var );
+		Var a = ctx.addVar( Var_t::Atom );
+		Var b = ctx.addVar( Var_t::Atom );
+		Var c = ctx.addVar( Var_t::Atom );
 		ctx.startAddConstraints();
 		ctx.endInit();
 		Literal tag = posLit(solver->pushTagVar(true));
 		ClauseCreator cc(solver);
 		// ~a ~b ~c ~tag
-		cc.start(Constraint_t::learnt_conflict).add(negLit(a)).add(negLit(b)).add(negLit(c)).add(~tag);
+		cc.start(Constraint_t::Conflict).add(negLit(a)).add(negLit(b)).add(negLit(c)).add(~tag);
 		ClauseHead* clause = cc.end().local;
 		
 		solver->force(posLit(c));
@@ -526,7 +523,7 @@ public:
 	}
 
 	void testClauseSatisfied() {
-		ConstraintType t = Constraint_t::learnt_conflict;
+		ConstraintType t = Constraint_t::Conflict;
 		TypeSet ts; ts.addSet(t);
 		Clause* c;
 		solver->addLearnt(c = createClause(2, 2, t), 4);
@@ -545,7 +542,7 @@ public:
 		free.clear();
 		CPPUNIT_ASSERT_EQUAL(uint32(t), c->isOpen(*solver, ts, free));
 		CPPUNIT_ASSERT_EQUAL(LitVec::size_type(2), free.size());
-		ts.m = 0; ts.addSet(Constraint_t::learnt_loop);
+		ts.m = 0; ts.addSet(Constraint_t::Loop);
 		CPPUNIT_ASSERT_EQUAL(uint32(0), c->isOpen(*solver, ts, free));
 	}
 	
@@ -557,7 +554,7 @@ public:
 			lits.push_back(posLit(i));
 		}
 		solver->strategies().compress = 6;
-		ClauseHead* cl = ClauseCreator::create(*solver, lits, 0, Constraint_t::learnt_conflict).local;
+		ClauseHead* cl = ClauseCreator::create(*solver, lits, 0, Constraint_t::Conflict).local;
 		uint32  s1 = cl->size();
 		CPPUNIT_ASSERT(s1 < lits.size());
 		LitVec r;
@@ -579,7 +576,7 @@ public:
 			// (false) tail
 			clLits.push_back(posLit(i));
 		}
-		ClauseRep   x = ClauseRep::create(&clLits[0], (uint32)clLits.size(), ClauseInfo(Constraint_t::learnt_conflict));
+		ClauseRep   x = ClauseRep::create(&clLits[0], (uint32)clLits.size(), ClauseInfo(Constraint_t::Conflict));
 		ClauseHead* c = Clause::newContractedClause(*solver, x, 3, false);
 		solver->addLearnt(c, static_cast<uint32>(clLits.size()));
 		CPPUNIT_ASSERT(c->size() < clLits.size());
@@ -619,7 +616,7 @@ public:
 	}
 
 	void testClone() {
-		Solver& solver2 = ctx.addSolver();
+		Solver& solver2 = ctx.pushSolver();
 		ctx.endInit(true);
 		ClauseHead* c      = createClause(3, 3);
 		ClauseHead* clone  = (ClauseHead*)c->cloneAttach(solver2);
@@ -730,7 +727,7 @@ public:
 		solver->propagate();
 
 		CPPUNIT_ASSERT_EQUAL( true, solver->isTrue(b2) );
-		CPPUNIT_ASSERT_EQUAL( Antecedent::generic_constraint, solver->reason(b2).type() );
+		CPPUNIT_ASSERT_EQUAL( Antecedent::Generic, solver->reason(b2).type() );
 		LitVec r;
 		solver->reason(b2, r);
 		CPPUNIT_ASSERT_EQUAL( LitVec::size_type(3), r.size() );
@@ -757,7 +754,7 @@ public:
 
 		CPPUNIT_ASSERT_EQUAL( true, solver->isTrue(b3) );
 		
-		CPPUNIT_ASSERT_EQUAL( Antecedent::generic_constraint, solver->reason(b3).type() );
+		CPPUNIT_ASSERT_EQUAL( Antecedent::Generic, solver->reason(b3).type() );
 		LitVec r;
 		solver->reason(b3, r);
 		CPPUNIT_ASSERT_EQUAL( LitVec::size_type(3), r.size() );
@@ -786,7 +783,7 @@ public:
 		CPPUNIT_ASSERT_EQUAL( true, solver->isTrue(~a2) );
 		CPPUNIT_ASSERT_EQUAL( true, solver->isTrue(~a3) );
 		
-		CPPUNIT_ASSERT_EQUAL( Antecedent::generic_constraint, solver->reason(~a2).type() );
+		CPPUNIT_ASSERT_EQUAL( Antecedent::Generic, solver->reason(~a2).type() );
 		LitVec r;
 		solver->reason(~a2, r);
 		CPPUNIT_ASSERT_EQUAL( LitVec::size_type(3), r.size() );
@@ -817,7 +814,7 @@ public:
 		CPPUNIT_ASSERT_EQUAL( true, solver->isTrue(~a3) );
 		
 		
-		CPPUNIT_ASSERT_EQUAL( Antecedent::generic_constraint, solver->reason(~a1).type() );
+		CPPUNIT_ASSERT_EQUAL( Antecedent::Generic, solver->reason(~a1).type() );
 		LitVec r;
 		solver->reason(~a1, r);
 		CPPUNIT_ASSERT_EQUAL( LitVec::size_type(3), r.size() );
@@ -896,8 +893,8 @@ public:
 
 	void testLoopFormulaSatisfied() {
 		LoopFormula* lf = lfTestInit();
-		ConstraintType t= Constraint_t::learnt_loop;
-		TypeSet ts, other; ts.addSet(t); other.addSet(Constraint_t::learnt_conflict);
+		ConstraintType t= Constraint_t::Loop;
+		TypeSet ts, other; ts.addSet(t); other.addSet(Constraint_t::Conflict);
 		LitVec free;
 		CPPUNIT_ASSERT_EQUAL(uint32(0), lf->isOpen(*solver, ts, free));
 		solver->undoUntil(0);
@@ -999,7 +996,7 @@ private:
 		uint32 flags = ClauseCreator::clause_explicit | ClauseCreator::clause_no_add | ClauseCreator::clause_no_prepare;
 		return (Clause*)ClauseCreator::create(*solver, lits, flags, info).local;
 	}
-	Clause* createClause(int pos, int neg, ConstraintType t = Constraint_t::static_constraint) {
+	Clause* createClause(int pos, int neg, ConstraintType t = Constraint_t::Static) {
 		clLits.clear();
 		int size = pos + neg;
 		LitVec lit(size);

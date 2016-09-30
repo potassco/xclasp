@@ -18,12 +18,16 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
 #include "test.h"
+#include "lpcompare.h"
+#include <signal.h>
 #include <clasp/solver.h>
 #include <clasp/clause.h>
 #include <clasp/clasp_facade.h>
 #include <clasp/minimize_constraint.h>
 #include <clasp/heuristics.h>
 #include <clasp/lookahead.h>
+#include <clasp/clingo.h>
+#include <clasp/model_enumerators.h>
 
 namespace Clasp { namespace Test {
 using namespace Clasp::mt;
@@ -32,8 +36,8 @@ class FacadeTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST_SUITE(FacadeTest);
 	CPPUNIT_TEST(testPrepareIsIdempotent);
 	CPPUNIT_TEST(testPrepareIsImplicit);
-	CPPUNIT_TEST(testCannotPrepareSolvedProgram);
-	CPPUNIT_TEST(testCannotSolveSolvedProgram);
+	CPPUNIT_TEST(testPrepareSolvedProgram);
+	CPPUNIT_TEST(testSolveSolvedProgram);
 	CPPUNIT_TEST(testSolveAfterStopConflict);
 	CPPUNIT_TEST(testRestartAfterPrepare);
 	
@@ -41,18 +45,29 @@ class FacadeTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testUpdateWithoutSolveDoesNotIncStep);
 	CPPUNIT_TEST(testInterruptBeforePrepareInterruptsNext);
 	CPPUNIT_TEST(testInterruptBeforeSolveInterruptsNext);
+	CPPUNIT_TEST(testInterruptAfterSolveInterruptsNext);
+	CPPUNIT_TEST(testInterruptBeforeUpdateInterruptsNext);
+	CPPUNIT_TEST(testUpdateCanIgnoreQueuedSignals);
 	CPPUNIT_TEST(testShutdownStopsStep);
 
 	CPPUNIT_TEST(testSolveUnderAssumptions);
 	CPPUNIT_TEST(testPrepareTooStrongBound);
+
+	CPPUNIT_TEST(testComputeBraveViaOutput);
+	CPPUNIT_TEST(testComputeBraveViaProject);
+	CPPUNIT_TEST(testComputeQuery);
+	CPPUNIT_TEST(testOptN);
+	CPPUNIT_TEST(testOptNGenerator);
 
 	CPPUNIT_TEST(testIncrementalSolve);
 	CPPUNIT_TEST(testIncrementalEnum);
 	CPPUNIT_TEST(testIncrementalCons);
 	CPPUNIT_TEST(testIncrementalMin);
 	CPPUNIT_TEST(testIncrementalMinIgnore);
+	CPPUNIT_TEST(testIncrementalMinAdd);
 	CPPUNIT_TEST(testUpdateConfig);
 	CPPUNIT_TEST(testIncrementalProjectUpdate);
+	CPPUNIT_TEST(testIncrementalDomRecUpdate);
 	CPPUNIT_TEST(testIncrementalConfigUpdateBug);
 	CPPUNIT_TEST(testIncrementalLookaheadAddHeuristic);
 	CPPUNIT_TEST(testIncrementalDisableLookahead);
@@ -60,8 +75,11 @@ class FacadeTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testIncrementalExtendLookahead);
 	CPPUNIT_TEST(testIncrementalAddSolver);
 	CPPUNIT_TEST(testIncrementalRemoveSolver);
-	CPPUNIT_TEST(testStats);
+	CPPUNIT_TEST(testClingoStats);
+	CPPUNIT_TEST(testClingoStatsKeyIntegrity);
+	CPPUNIT_TEST(testClingoStatsWithoutStats);
 #if WITH_THREADS
+	CPPUNIT_TEST(testClingoSolverStatsRemainValid);
 	CPPUNIT_TEST(testShareModeRegression);
 	CPPUNIT_TEST(testAsyncSolveTrivialUnsat);
 	CPPUNIT_TEST(testInterruptBeforeSolve);
@@ -71,13 +89,22 @@ class FacadeTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testDestroyDanglingAsyncResult);
 	CPPUNIT_TEST(testCancelDanglingAsyncOperation);
 #endif
-	CPPUNIT_TEST_SUITE_END(); 
+	CPPUNIT_TEST(testGenSolveTrivialUnsat);
+	CPPUNIT_TEST(testInterruptBeforeGenSolve);
+	CPPUNIT_TEST(testGenSolveWithLimit);
+	CPPUNIT_TEST(testCancelGenSolve);
+	CPPUNIT_TEST(testGenDtorCancelsSolve);
+#if WITH_THREADS
+	CPPUNIT_TEST(testGenSolveMt);
+#endif
+
+	CPPUNIT_TEST(testUserConfigurator);
+	CPPUNIT_TEST(testUserHeuristic);
+	CPPUNIT_TEST_SUITE_END();
 public:
 	typedef ClaspFacade::Result Result;
 	void addProgram(Clasp::Asp::LogicProgram& prg) {
-		prg.setAtomName(1, "a").setAtomName(2, "b");
-		prg.startRule().addHead(1).addToBody(2, false).endRule();
-		prg.startRule().addHead(2).addToBody(1, false).endRule();
+		lpAdd(prg, "a :- not b. b :- not a.");
 	}
 	
 	void testPrepareIsIdempotent() {
@@ -106,7 +133,7 @@ public:
 		CPPUNIT_ASSERT(libclasp.summary().step == 0);
 	}
 
-	void testCannotPrepareSolvedProgram() {
+	void testPrepareSolvedProgram() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
 		config.solve.numModels = 0;
@@ -114,9 +141,15 @@ public:
 		addProgram(asp);
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
-		CPPUNIT_ASSERT_THROW(libclasp.prepare(), std::logic_error);
+		CPPUNIT_ASSERT(libclasp.summary().numEnum == 2);
+		CPPUNIT_ASSERT(libclasp.summary().step == 0);
+
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.solve().sat());
+		CPPUNIT_ASSERT(libclasp.summary().numEnum == 2);
+		CPPUNIT_ASSERT(libclasp.summary().step == 1);
 	}
-	void testCannotSolveSolvedProgram() {
+	void testSolveSolvedProgram() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
 		config.solve.numModels = 0;
@@ -124,7 +157,10 @@ public:
 		addProgram(asp);
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
-		CPPUNIT_ASSERT_THROW(libclasp.solve(), std::logic_error);
+		
+		CPPUNIT_ASSERT(libclasp.solve().sat());
+		CPPUNIT_ASSERT(libclasp.summary().numEnum == 2);
+		CPPUNIT_ASSERT(libclasp.summary().step == 1);
 	}
 	void testSolveAfterStopConflict() {
 		Clasp::ClaspFacade libclasp;
@@ -145,7 +181,6 @@ public:
 		libclasp.update();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 	}
-	
 	void testRestartAfterPrepare() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
@@ -195,7 +230,7 @@ public:
 			}
 			int finished;
 		} fh;
-		CPPUNIT_ASSERT(libclasp.terminate(1) == false);
+		CPPUNIT_ASSERT(libclasp.interrupt(1) == false);
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve(&fh).interrupted());
 		CPPUNIT_ASSERT(libclasp.solved());
@@ -216,13 +251,58 @@ public:
 			int finished;
 		} fh;
 		libclasp.prepare();
-		CPPUNIT_ASSERT(libclasp.terminate(1) == false);
+		CPPUNIT_ASSERT(libclasp.interrupt(1) == false);
 		CPPUNIT_ASSERT(!libclasp.solved());
 		CPPUNIT_ASSERT(libclasp.solve(&fh).interrupted());
 		CPPUNIT_ASSERT(libclasp.solved());
 		CPPUNIT_ASSERT(fh.finished == 1);
 	}
 
+	void testInterruptAfterSolveInterruptsNext() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.solve.numModels = 0;
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		addProgram(asp);
+		struct FH : EventHandler {
+			FH() : finished(0) {}
+			virtual void onEvent(const Event& ev) {
+				finished += event_cast<ClaspFacade::StepReady>(ev) != 0;
+			}
+			int finished;
+		} fh;
+		libclasp.prepare();
+		CPPUNIT_ASSERT(!libclasp.solve(&fh).interrupted());
+		CPPUNIT_ASSERT(fh.finished == 1);
+		CPPUNIT_ASSERT(libclasp.solved());
+		CPPUNIT_ASSERT(!libclasp.interrupted());
+		CPPUNIT_ASSERT(libclasp.interrupt(1) == false);
+		CPPUNIT_ASSERT(libclasp.solve(&fh).interrupted());
+		CPPUNIT_ASSERT(fh.finished == 2);
+	}
+	void testInterruptBeforeUpdateInterruptsNext() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.solve.numModels = 0;
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		addProgram(asp);
+		libclasp.prepare();
+		libclasp.interrupt(1);
+		libclasp.update(false);
+		CPPUNIT_ASSERT(!libclasp.interrupted());
+		CPPUNIT_ASSERT(libclasp.solve().interrupted());
+	}
+	void testUpdateCanIgnoreQueuedSignals() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.solve.numModels = 0;
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		addProgram(asp);
+		libclasp.prepare();
+		libclasp.interrupt(1);
+		libclasp.update(false, SIG_IGN);
+		CPPUNIT_ASSERT(!libclasp.solve().interrupted());
+	}
 
 	void testShutdownStopsStep() {
 		Clasp::ClaspFacade libclasp;
@@ -242,7 +322,6 @@ public:
 		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
 		addProgram(asp);
 		Var ext = asp.newAtom();
-		asp.setAtomName(ext, "ext");
 		asp.freeze(ext, value_true);
 		libclasp.prepare();
 		LitVec assume(1, asp.getLiteral(1));
@@ -261,8 +340,7 @@ public:
 		mh1.exp.push_back(asp.getLiteral(1));
 		mh1.exp.push_back(~asp.getLiteral(2));
 		mh1.exp.push_back(asp.getLiteral(ext));
-		libclasp.assume(assume);
-		libclasp.solve(&mh1);
+		libclasp.solve(&mh1, assume);
 		CPPUNIT_ASSERT(mh1.models == 1);
 		libclasp.update();
 		asp.freeze(ext, value_false);
@@ -270,12 +348,9 @@ public:
 		mh2.exp.push_back(~asp.getLiteral(1));
 		mh2.exp.push_back(asp.getLiteral(2));
 		mh2.exp.push_back(~asp.getLiteral(ext));
-		libclasp.prepare();
-		libclasp.assume(assume);
-		libclasp.solve(&mh2);
+		libclasp.solve(&mh2, assume);
 		CPPUNIT_ASSERT(mh2.models == 1);
 		libclasp.update();
-		libclasp.prepare();
 		libclasp.solve();
 		CPPUNIT_ASSERT(libclasp.summary().numEnum == 2);
 	}
@@ -285,14 +360,108 @@ public:
 		Clasp::ClaspConfig config;
 		config.solve.numModels = 0;
 		config.solve.optBound.assign(1, 0);
-		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		addProgram(asp);
-		Var c = asp.newAtom();
-		asp.setAtomName(c, "c");
-		asp.startRule().addHead(c).endRule();
-		asp.startRule(Asp::OPTIMIZERULE).addToBody(c, true).addToBody(1, true).addToBody(2, true).endRule();
+		lpAdd(libclasp.startAsp(config, true),
+			"a :-not b.\n"
+			"b :-not a.\n"
+			"c.\n"
+			"#minimize{c, a, b}.");
+		
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().unsat());
+	}
+
+	void testComputeBraveViaOutput() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.solve.numModels = 0;
+		config.solve.enumMode  = EnumOptions::enum_brave;
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp,
+			"x1 :- not x2.\n"
+			"x2 :- not x1.\n"
+			"x3 :- not x1.\n"
+			"#output a : x1.\n"
+			"#output b : x2.\n");
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.solve().sat());
+		const Model& m = *libclasp.summary().model();
+		CPPUNIT_ASSERT(m.isDef(asp.getLiteral(1)));
+		CPPUNIT_ASSERT(m.isDef(asp.getLiteral(2)));
+	}
+	void testComputeQuery() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.solve.numModels = 0;
+		config.solve.enumMode = EnumOptions::enum_query;
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp,
+			"{a,b}."
+			"c :- a.\n"
+			"c :- b.\n"
+			"c :- not a, not b.\n"
+			"#output a : a.\n"
+			"#output b : b.\n"
+			"#output c : c.\n");
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.solve().sat());
+		const Model& m = *libclasp.summary().model();
+		CPPUNIT_ASSERT(m.isDef(asp.getLiteral(3)));
+		CPPUNIT_ASSERT(!m.isDef(asp.getLiteral(1)));
+		CPPUNIT_ASSERT(!m.isDef(asp.getLiteral(2)));
+	}
+	void testComputeBraveViaProject() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.solve.numModels = 0;
+		config.solve.enumMode  = EnumOptions::enum_brave;
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp,
+			"x1 :- not x2.\n"
+			"x2 :- not x1.\n"
+			"x3 :- not x1.\n"
+			"#project {x1,x2,x3}.");
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.solve().sat());
+		const Model& m = *libclasp.summary().model();
+		CPPUNIT_ASSERT(m.isDef(asp.getLiteral(1)));
+		CPPUNIT_ASSERT(m.isDef(asp.getLiteral(2)));
+	}
+	void testOptN() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.solve.numModels = 0;
+		config.solve.optMode   = MinimizeMode_t::enumOpt;
+		lpAdd(libclasp.startAsp(config, false),
+			"{x1;x2;x3}.\n"
+			":- not x1, not x2, not x3.\n"
+			":- x2, not x1.\n"
+			":- x3, not x1.\n"
+			"#minimize{not x1}@0.\n"
+			"#minimize{x1}@1.");
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.solve().sat());
+		CPPUNIT_ASSERT_EQUAL(uint64(4), libclasp.summary().optimal());
+	}
+	void testOptNGenerator() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.solve.numModels = 0;
+		config.solve.optMode   = MinimizeMode_t::enumOpt;
+		lpAdd(libclasp.startAsp(config, false),
+			"{x1;x2;x3}.\n"
+			":- not x1, not x2, not x3.\n"
+			":- x2, not x1.\n"
+			":- x3, not x1.\n"
+			"#minimize{not x1}@0.\n"
+			"#minimize{x1}@1.");
+		libclasp.prepare();
+		Clasp::ClaspFacade::ModelGenerator it = libclasp.startSolve();
+		unsigned num = 0, opt = 0;
+		while (it.next()) {
+			++num;
+			opt += it.model().opt;
+		}
+		CPPUNIT_ASSERT(num > opt && opt == 4);
 	}
 
 	void testRunIncremental(Result::Base stop, int maxStep, int minStep, Result::Base expectedRes, int expectedSteps) {
@@ -306,30 +475,30 @@ public:
 			f.update();
 			switch(f.step()) {
 			default: break;
-			case 0:
-				asp.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "x")
-					 .startRule().addHead(1).addToBody(2, true).endRule()
-					 .startRule().addHead(2).addToBody(1, true).endRule()
-					 .startRule().addHead(1).addToBody(3, true).endRule()
-					 .freeze(3)
-					 .setCompute(1, true);
+			case 0: 
+				lpAdd(asp,
+				"x1 :- x2.\n"
+				"x2 :- x1.\n"
+				"x1 :- x3.\n"
+				":- not x1.\n"
+				"#external x3.");
 				break;
 			case 1:
-				asp.setAtomName(4, "y").setAtomName(5, "z")
-				   .startRule().addHead(3).addToBody(4, true).endRule()
-				   .startRule().addHead(4).addToBody(3, true).endRule()
-				   .startRule().addHead(4).addToBody(5, true).endRule()
-				   .freeze(5);
+				lpAdd(asp,
+					"x3 :- x4.\n"
+					"x4 :- x3.\n"
+					"x4 :- x5.\n"
+					"#external x5.");
 				break;
 			case 2:
-				asp.setAtomName(6, "q").setAtomName(7, "r")
-				   .startRule().addHead(5).addToBody(6, true).addToBody(7, true).endRule()
-				   .startRule().addHead(6).addToBody(3, false).endRule()
-				   .startRule().addHead(7).addToBody(1, false).addToBody(2, false).endRule()
-				   .startRule(Asp::CHOICERULE).addHead(5).endRule();
+				lpAdd(asp,
+					"x5 :- x6, x7.\n"
+					"x6 :- not x3.\n"
+					"x7 :- not x1, not x2.\n"
+					"{x5}.");
 				break;
 			case 3:
-				asp.setAtomName(8,"f").startRule(Asp::CHOICERULE).addHead(8).endRule();
+				lpAdd(asp, "{x8}.");
 				break;
 			}
 			f.prepare();
@@ -350,14 +519,12 @@ public:
 		config.solve.numModels = 0;
 		config.solve.enumMode  = EnumOptions::enum_record;
 		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a");
-		asp.startRule(Clasp::Asp::CHOICERULE).addHead(1).endRule();
+		lpAdd(asp, "{x1}.");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 		CPPUNIT_ASSERT(libclasp.summary().numEnum == 2);
 		CPPUNIT_ASSERT(libclasp.update().ok());
-		asp.setAtomName(2, "b");
-		asp.startRule(Clasp::Asp::CHOICERULE).addHead(2).endRule();
+		lpAdd(asp, "{x2}.");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 		CPPUNIT_ASSERT(libclasp.summary().numEnum == 4);
@@ -367,9 +534,11 @@ public:
 		Clasp::ClaspConfig config;
 		config.solve.numModels = 0;
 		config.solve.enumMode  = EnumOptions::enum_cautious;
-		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c");
-		asp.startRule(Clasp::Asp::CHOICERULE).addHead(1).addHead(2).addHead(3).endRule();
+		lpAdd(libclasp.startAsp(config, true),
+			"{x1;x2;x3}.\n"
+			"#output a : x1.\n"
+			"#output b : x2.\n"
+			"#output c : x3.\n");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 		config.solve.enumMode = EnumOptions::enum_brave;
@@ -383,14 +552,13 @@ public:
 		Clasp::ClaspConfig config;
 		config.solve.numModels = 0;
 		config.solve.enumMode  = EnumOptions::enum_auto;
-		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c");
-		asp.startRule(Clasp::Asp::CHOICERULE).addHead(1).addHead(2).addHead(3).endRule();
-		asp.startRule(Clasp::Asp::OPTIMIZERULE).addToBody(1,true).addToBody(2, true).addToBody(3, true).endRule();
+		lpAdd(libclasp.startAsp(config, true),
+			"{x1;x2;x3}.\n"
+			"#minimize{x1, x2, x3}.\n");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 		CPPUNIT_ASSERT(libclasp.summary().numEnum < 8u);
-		libclasp.update().disposeMinimizeConstraint();
+		libclasp.update().ctx()->removeMinimize();
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 		CPPUNIT_ASSERT(libclasp.summary().numEnum == 8);
@@ -400,10 +568,9 @@ public:
 		Clasp::ClaspConfig config;
 		config.solve.optMode = MinimizeMode_t::ignore;
 		config.solve.numModels = 0;
-		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a").setAtomName(2, "b");
-		asp.startRule(Clasp::Asp::CHOICERULE).addHead(1).addHead(2).endRule();
-		asp.startRule(Clasp::Asp::OPTIMIZERULE).addToBody(1, true).addToBody(2, true).endRule();
+		lpAdd(libclasp.startAsp(config, true),
+			"{x1;x2}.\n"
+			"#minimize{x1, x2}.\n");		
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 		CPPUNIT_ASSERT(libclasp.summary().numEnum == 4u);
@@ -413,18 +580,35 @@ public:
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 		CPPUNIT_ASSERT(libclasp.summary().numEnum == 1u);
 	}
+	void testIncrementalMinAdd() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.solve.numModels = 0;
+		config.solve.enumMode  = EnumOptions::enum_auto;
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp,
+			"{x1;x2}.\n"
+			"#minimize{not x1}.\n");
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.solve().sat());
+		CPPUNIT_ASSERT(libclasp.summary().model()->isTrue(asp.getLiteral(1)));
+		libclasp.update();
+		lpAdd(asp, "#minimize{not x2}.");
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.solve().sat());
+		CPPUNIT_ASSERT(libclasp.summary().model()->isTrue(asp.getLiteral(1)));
+		CPPUNIT_ASSERT(libclasp.summary().model()->isTrue(asp.getLiteral(2)));
+	}
 	void testUpdateConfig() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
 		config.solve.numModels = 0;
 		config.solve.enumMode  = EnumOptions::enum_auto;
-		config.addSolver(0).heuId  = Heuristic_t::heu_berkmin;
-		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c");
-		asp.startRule(Clasp::Asp::CHOICERULE).addHead(1).addHead(2).addHead(3).endRule();
+		config.addSolver(0).heuId  = Heuristic_t::Berkmin;
+		lpAdd(libclasp.startAsp(config, true), "{x1;x2;x3}.");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
-		config.addSolver(0).heuId = Heuristic_t::heu_vsids;
+		config.addSolver(0).heuId = Heuristic_t::Vsids;
 		libclasp.update(true);
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
@@ -437,10 +621,9 @@ public:
 		config.solve.enumMode  = EnumOptions::enum_auto;
 		config.solve.project   = 1;
 		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "_a").setAtomName(2, "b");
-		asp.startRule(Clasp::Asp::CHOICERULE).addHead(1).addHead(2).endRule();
+		lpAdd(asp, "{x1;x2}. #output b : x2.");
 		libclasp.prepare();
-		CPPUNIT_ASSERT(libclasp.ctx.varInfo(libclasp.ctx.symbolTable()[2].lit.var()).project());
+		CPPUNIT_ASSERT(static_cast<const ModelEnumerator*>(libclasp.enumerator())->project(asp.getLiteral(2).var()));
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 		CPPUNIT_ASSERT(libclasp.summary().numEnum == 2);
 		config.solve.project = 0;
@@ -450,29 +633,48 @@ public:
 		CPPUNIT_ASSERT(libclasp.summary().numEnum == 4);
 		config.solve.project = 1;
 		libclasp.update(true);
-		asp.setAtomName(3, "_x").setAtomName(4, "y");
-		asp.startRule(Clasp::Asp::CHOICERULE).addHead(3).addHead(4).endRule();
+		lpAdd(asp, "{x3;x4}. #output y : x4.");
 		libclasp.prepare();
-		CPPUNIT_ASSERT(libclasp.ctx.varInfo(libclasp.ctx.symbolTable()[2].lit.var()).project());
-		CPPUNIT_ASSERT(libclasp.ctx.varInfo(libclasp.ctx.symbolTable()[4].lit.var()).project());
+		CPPUNIT_ASSERT(static_cast<const ModelEnumerator*>(libclasp.enumerator())->project(asp.getLiteral(2).var()));
+		CPPUNIT_ASSERT(static_cast<const ModelEnumerator*>(libclasp.enumerator())->project(asp.getLiteral(4).var()));
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 		CPPUNIT_ASSERT_EQUAL(uint64(4), libclasp.summary().numEnum);
+	}
+	void testIncrementalDomRecUpdate() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.solve.numModels = 0;
+		config.solve.enumMode  = EnumOptions::enum_dom_record;
+		config.addSolver(0).heuId  = Heuristic_t::Domain;
+		config.addSolver(0).heuristic.domMod  = HeuParams::mod_false;
+		config.addSolver(0).heuristic.domPref = HeuParams::pref_show;
+		lpAdd(libclasp.startAsp(config, true),
+			"{x1;x2}.\n"
+			":- not x1, not x2.\n"
+			"#output b : x2.\n"
+			"#output a : x1.\n");
+		CPPUNIT_ASSERT(libclasp.solve().sat());
+		// {a} ; {b}
+		CPPUNIT_ASSERT(libclasp.summary().numEnum == 2);
+		
+		config.addSolver(0).heuristic.domMod = HeuParams::mod_true;
+		libclasp.update(true);
+		CPPUNIT_ASSERT(libclasp.solve().sat());
+		// {a,b}
+		CPPUNIT_ASSERT(libclasp.summary().numEnum == 1);
 	}
 	void testIncrementalConfigUpdateBug() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
 		config.asp.erMode = Asp::LogicProgram::mode_transform;
 		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		Var a = asp.newAtom(), b = asp.newAtom();
-		asp.setAtomName(a, "a").setAtomName(b, "b");
-		asp.startRule(Asp::CHOICERULE).addHead(a).addHead(b).endRule();
+		lpAdd(asp, "{x1;x2}.");
 		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.ctx.ok());
 		CPPUNIT_ASSERT(asp.stats.auxAtoms == 2);
 		config.asp.erMode = Asp::LogicProgram::mode_native;
 		libclasp.update(true);
-		Var c = asp.newAtom(), d = asp.newAtom();
-		asp.setAtomName(c, "c").setAtomName(d, "d");
-		asp.startRule(Asp::CHOICERULE).addHead(c).addHead(d).endRule();
+		lpAdd(asp, "{x3;x4}.");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(asp.stats.auxAtoms == 0);
 	}
@@ -480,12 +682,12 @@ public:
 	void testIncrementalLookaheadAddHeuristic() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
-		config.addSolver(0).lookType = Lookahead::atom_lookahead;
-		libclasp.startAsp(config, true).setAtomName(1, "a").setAtomName(2, "b").startRule(Asp::CHOICERULE).addHead(1).addHead(2).endRule();
+		config.addSolver(0).lookType = Var_t::Atom;
+		lpAdd(libclasp.startAsp(config, true), "{x1;x2}.");
 		libclasp.prepare();
 		PostPropagator* look = libclasp.ctx.master()->getPost(PostPropagator::priority_reserved_look);
 		CPPUNIT_ASSERT(look && look->next == 0);
-		config.addSolver(0).heuId = Heuristic_t::heu_unit;
+		config.addSolver(0).heuId = Heuristic_t::Unit;
 		libclasp.update(true);
 		libclasp.prepare();
 		look = libclasp.ctx.master()->getPost(PostPropagator::priority_reserved_look);
@@ -494,11 +696,11 @@ public:
 	void testIncrementalDisableLookahead() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
-		config.addSolver(0).lookType = Lookahead::atom_lookahead;
-		libclasp.startAsp(config, true).setAtomName(1, "a").setAtomName(2, "b").startRule(Asp::CHOICERULE).addHead(1).addHead(2).endRule();
+		config.addSolver(0).lookType = Var_t::Atom;
+		lpAdd(libclasp.startAsp(config, true), "{x1;x2}.");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.ctx.master()->getPost(PostPropagator::priority_reserved_look));
-		config.addSolver(0).lookType = Lookahead::no_lookahead;
+		config.addSolver(0).lookType = 0;
 		libclasp.update(true);
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.ctx.master()->getPost(PostPropagator::priority_reserved_look) == 0);
@@ -506,26 +708,28 @@ public:
 	void testIncrementalChangeLookahead() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
-		config.addSolver(0).lookType = Lookahead::atom_lookahead;
-		libclasp.startAsp(config, true).setAtomName(1, "a").setAtomName(2, "b").startRule(Asp::CHOICERULE).addHead(1).addHead(2).endRule();
+		config.addSolver(0).lookType = Var_t::Atom;
+		lpAdd(libclasp.startAsp(config, true), "{x1;x2}.");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.ctx.master()->getPost(PostPropagator::priority_reserved_look));
-		config.addSolver(0).lookType = Lookahead::body_lookahead;
+		config.addSolver(0).lookType = Var_t::Body;
 		libclasp.update(true);
 		libclasp.prepare();
 		Lookahead* look = static_cast<Lookahead*>(libclasp.ctx.master()->getPost(PostPropagator::priority_reserved_look));
-		CPPUNIT_ASSERT(look && look->score.types == Var_t::body_var );
+		CPPUNIT_ASSERT(look && look->score.types == Var_t::Body );
 	}
 	void testIncrementalExtendLookahead() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
-		config.addSolver(0).lookType = Lookahead::atom_lookahead;
+		config.addSolver(0).lookType = Var_t::Atom;
 		config.addSolver(0).lookOps  = 3;
-		libclasp.startAsp(config, true).setAtomName(1, "a").setAtomName(2, "b").startRule(Asp::CHOICERULE).addHead(1).addHead(2).endRule();
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp, "{x1;x2}.");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.ctx.master()->getPost(PostPropagator::priority_reserved_look));
 		config.addSolver(0).lookOps  = 0;
-		static_cast<Asp::LogicProgram&>(libclasp.update(true)).startRule(Asp::CHOICERULE).addHead(3).addHead(4).endRule();
+		libclasp.update(true);
+		lpAdd(asp, "{x3;x4}.");
 		libclasp.prepare();
 		Lookahead* look = static_cast<Lookahead*>(libclasp.ctx.master()->getPost(PostPropagator::priority_reserved_look));
 		CPPUNIT_ASSERT(look && look->next == 0 );
@@ -538,15 +742,17 @@ public:
 	void testIncrementalAddSolver() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
-		libclasp.startAsp(config, true).setAtomName(1, "a").setAtomName(2, "b").startRule(Asp::CHOICERULE).addHead(1).addHead(2).endRule();
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp, "{x1;x2}.");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(!isSentinel(libclasp.ctx.stepLiteral()));
-		if (config.solve.supportedSolvers() > 1) {
-			config.solve.setSolvers(2);
-			static_cast<Asp::LogicProgram&>(libclasp.update(true)).startRule(Asp::CHOICERULE).addHead(3).addHead(4).endRule();
-			libclasp.prepare();
-			CPPUNIT_ASSERT(libclasp.ctx.concurrency() == 2 && libclasp.ctx.hasSolver(1));
-		}
+#if WITH_THREADS
+		config.solve.setSolvers(2);
+		libclasp.update(true);
+		lpAdd(asp, "{x3;x4}.");
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.ctx.concurrency() == 2 && libclasp.ctx.hasSolver(1));
+#endif
 	}
 	
 	void testIncrementalRemoveSolver() {
@@ -554,17 +760,17 @@ public:
 		Clasp::ClaspConfig config;
 		config.solve.numModels = 0;
 		config.solve.setSolvers(4);
-		libclasp.startAsp(config, true)
-			.setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(Asp::CHOICERULE).addHead(1).addHead(2).addHead(4).addHead(3).endRule()
-			.startRule(Asp::CONSTRAINTRULE, 3).addHead(7).addToBody(1, true).addToBody(2, true).addToBody(3, true).addToBody(4, true).endRule()
-			.setCompute(7, false);
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp,
+			"{x1;x2;x4;x3}.\n"
+			":- 3 {x1, x2, x3, x4}.\n");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 		CPPUNIT_ASSERT_EQUAL(uint64(11), libclasp.summary().numEnum);
 
 		config.solve.setSolvers(1);
-		static_cast<Asp::LogicProgram&>(libclasp.update(true)).startRule().addHead(7).addToBody(1, true).addToBody(2, true).endRule();
+		libclasp.update(true);
+		lpAdd(asp, ":- x1, x2.\n");
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat() && libclasp.summary().numEnum == 10);
 
@@ -574,64 +780,177 @@ public:
 		CPPUNIT_ASSERT(libclasp.solve().sat() && libclasp.summary().numEnum == 10);
 	}
 
-	void testStats() {
+	void testClingoStats() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
 		config.stats = 2;
 		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c");
-		asp.startRule(Clasp::Asp::CHOICERULE).addHead(1).addHead(2).addHead(3).endRule();
-		asp.startRule(Clasp::Asp::OPTIMIZERULE).addToBody(1, true).addToBody(2, true).endRule();
+		lpAdd(asp, "{x1;x2;x3}. #minimize{x1, x2}.");
 		libclasp.prepare();
 		libclasp.solve();
+		Potassco::AbstractStatistics* stats = libclasp.getStats();
+		typedef Potassco::AbstractStatistics::Key_t Key_t;
+		Key_t r = stats->root();
+		CPPUNIT_ASSERT(stats->type(r) == Potassco::Statistics_t::Map);
+		Key_t lp = stats->get(r, "problem.lp");
+		Key_t s = stats->get(r, "solving");
+		Key_t m = stats->get(r, "summary.models");
+		CPPUNIT_ASSERT(stats->type(lp) == Potassco::Statistics_t::Map);
+		CPPUNIT_ASSERT(stats->value(stats->get(lp, "rules")) == double(asp.stats.rules[0].sum()));
+		CPPUNIT_ASSERT(stats->value(stats->get(m, "enumerated")) == double(libclasp.summary().numEnum));
+		Key_t solvers = stats->get(s, "solvers");
+		CPPUNIT_ASSERT(stats->value(stats->get(solvers, "choices")) == double(libclasp.ctx.master()->stats.choices));
+		Key_t costs = stats->get(r, "summary.costs");
+		CPPUNIT_ASSERT(stats->type(costs) == Potassco::Statistics_t::Array);
+		CPPUNIT_ASSERT(stats->value(stats->at(costs, 0)) == double(libclasp.summary().costs()->at(0)));
+		Key_t solver = stats->get(s, "solver");
+		CPPUNIT_ASSERT(stats->type(solver) == Potassco::Statistics_t::Array);
+		Key_t s0 = stats->at(solver, 0);
+		CPPUNIT_ASSERT(stats->type(s0) == Potassco::Statistics_t::Map);
+		CPPUNIT_ASSERT(stats->value(stats->get(s0, "choices")) == double(libclasp.ctx.master()->stats.choices));
 		std::vector<std::string> keys;
-		getKeys(libclasp, keys, "");
+		getKeys(*stats, r, keys, "");
 		CPPUNIT_ASSERT(!keys.empty());
 		for (std::vector<std::string>::const_iterator it = keys.begin(), end = keys.end(); it != end; ++it) {
-			CPPUNIT_ASSERT(libclasp.getStat(it->c_str()).valid());
+			CPPUNIT_ASSERT(stats->type(stats->get(r, it->c_str())) == Potassco::Statistics_t::Value);
 		}
-		CPPUNIT_ASSERT(libclasp.getStat("lp.rules") == double(asp.stats.rules()));
-		CPPUNIT_ASSERT(libclasp.getStat("enumerated") == double(libclasp.summary().enumerated()));
-		CPPUNIT_ASSERT(libclasp.getStat("solvers.choices") == double(libclasp.ctx.master()->stats.choices));
-		CPPUNIT_ASSERT(libclasp.getStat("costs.0") == double(libclasp.summary().costs()->at(0)));
-		CPPUNIT_ASSERT(libclasp.getStat("optimal") == double(libclasp.summary().optimal()));
+		CPPUNIT_ASSERT_MESSAGE("unexpected number of statistics", keys.size() == 236);
 	}
-
-	void getKeys(const ClaspFacade& f, std::vector<std::string>& out, const std::string& p) {
-		typedef std::pair<std::string, double> Stat;
-		std::size_t len = 0;
-		for (const char* k = f.getKeys(p.c_str()); (len = std::strlen(k)) != 0; k += len + 1) {
-			if (k[len-1] != '.') { 
-				out.push_back(p+k);
-				if (std::strcmp(k, "__len") == 0 && f.getStat(out.back().c_str()) > 0.0) {
-					if (f.getKeys((p+"0").c_str())) { getKeys(f, out, p+"0."); }
-					else                            { out.push_back(p+"0"); }
-				}
+	void testClingoStatsKeyIntegrity() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.stats = 2;
+		config.addTesterConfig()->stats = 2;
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp, "{x1;x2;x3}. #minimize{x1, x2}.");
+		libclasp.prepare();
+		libclasp.solve();
+		typedef Potassco::AbstractStatistics::Key_t Key_t;
+		Potassco::AbstractStatistics* stats = libclasp.getStats();
+		Key_t lp = stats->get(stats->root(), "problem.lp");
+		Key_t sccs = stats->get(lp, "sccs");
+		Key_t m0 = stats->get(stats->root(), "summary.costs.0");
+		CPPUNIT_ASSERT_THROW(stats->get(stats->root(), "hcc"), std::logic_error);
+		CPPUNIT_ASSERT(stats->value(m0) == (double)libclasp.summary().costs()->at(0));
+		libclasp.update();
+		lpAdd(asp, 
+			"x4 | x5 :- x6, not x1."
+			"x6 :- x4, x5, not x2."
+			"x6 :- not x1."
+		);
+		libclasp.prepare();
+		libclasp.solve();
+		CPPUNIT_ASSERT(asp.stats.sccs == 1);
+		CPPUNIT_ASSERT(asp.stats.nonHcfs == 1);
+		CPPUNIT_ASSERT(lp == stats->get(stats->root(), "problem.lp"));
+		CPPUNIT_ASSERT(sccs == stats->get(lp, "sccs"));
+		CPPUNIT_ASSERT(m0 == stats->get(stats->root(), "summary.costs.0"));
+		CPPUNIT_ASSERT(stats->value(sccs) == asp.stats.sccs);
+		CPPUNIT_ASSERT(stats->value(m0) == (double)libclasp.summary().costs()->at(0));
+		Key_t hcc0 = stats->get(stats->root(), "problem.hcc.0");
+		Key_t hcc0Vars = stats->get(hcc0, "vars");
+		CPPUNIT_ASSERT(stats->value(hcc0Vars) != 0.0);
+		libclasp.update();
+		libclasp.ctx.removeMinimize();
+		lpAdd(asp,
+			"x7 | x8 :- x9, not x1."
+			"x9 :- x7, x8, not x2."
+			"x9 :- not x1."
+		);
+		libclasp.prepare();
+		libclasp.solve();
+		CPPUNIT_ASSERT(libclasp.summary().lpStats()->sccs == 2);
+		CPPUNIT_ASSERT(libclasp.summary().lpStats()->nonHcfs == 2);
+		CPPUNIT_ASSERT(lp == stats->get(stats->root(), "problem.lp"));
+		CPPUNIT_ASSERT(sccs == stats->get(lp, "sccs"));
+		CPPUNIT_ASSERT_THROW(stats->value(m0), std::logic_error);
+		CPPUNIT_ASSERT(stats->value(hcc0Vars) != 0.0);
+		CPPUNIT_ASSERT(stats->value(stats->get(stats->root(), "problem.hcc.1.vars")) != 0.0);
+	}
+	void testClingoStatsWithoutStats() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp,
+			"{x1,x2,x3}."
+			"x3 | x4 :- x5, not x1."
+			"x5 :- x4, x3, not x2."
+			"x5 :- not x1."
+		);
+		libclasp.solve();
+		typedef Potassco::AbstractStatistics::Key_t Key_t;
+		Potassco::AbstractStatistics* stats = libclasp.getStats();
+		Key_t root = stats->root();
+		CPPUNIT_ASSERT(stats->size(root) == 3);
+		CPPUNIT_ASSERT(stats->get(root, "solving") != root);
+		CPPUNIT_ASSERT(stats->get(root, "problem") != root);
+		CPPUNIT_ASSERT(stats->get(root, "summary") != root);
+		CPPUNIT_ASSERT_THROW_MESSAGE("accu requires stats", stats->get(root, "solving.accu"), std::out_of_range);
+	}
+	void getKeys(const Potassco::AbstractStatistics& stats, Potassco::AbstractStatistics::Key_t k, std::vector<std::string>& out, const std::string& p) {
+		if (stats.type(k) == Potassco::Statistics_t::Map) {
+			for (uint32 i = 0, end = stats.size(k); i != end; ++i) {
+				const char* sk = stats.key(k, i);
+				getKeys(stats, stats.get(k, sk), out, p.empty() ? sk : std::string(p).append(".").append(sk));
 			}
-			else                 { getKeys(f, out, p+k); }
+		}
+		else if (stats.type(k) == Potassco::Statistics_t::Array) {
+			char buf[12];
+			for (uint32 i = 0, end = stats.size(k); i != end; ++i) {
+				getKeys(stats, stats.at(k, i), out, std::string(p).append(".").append(clasp_format(buf, 12, "%d", i)));
+			}
+		}
+		else {
+			out.push_back(p);
 		}
 	}
 #if WITH_THREADS
+	void testClingoSolverStatsRemainValid() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		config.stats = 2;
+		config.solve.algorithm.threads = 2;
+		config.solve.numModels = 0;
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp, "{x1,x2,x3}.");
+		libclasp.prepare();
+		libclasp.solve();
+		typedef Potassco::AbstractStatistics::Key_t Key_t;
+		Potassco::AbstractStatistics* stats = libclasp.getStats();
+		Key_t s = stats->get(stats->root(), "solving.solver");
+		Key_t s1 = stats->at(s, 1);
+		Key_t s1c = stats->get(stats->at(s, 1), "choices");
+		Key_t s0c = stats->get(stats->at(s, 0), "choices");
+		CPPUNIT_ASSERT(stats->size(s) == 2);
+		CPPUNIT_ASSERT(stats->value(s1c) + stats->value(s0c) == stats->value(stats->get(stats->root(), "solving.solvers.choices")));
+		config.solve.algorithm.threads = 1;
+		libclasp.update(true);
+		libclasp.solve();
+		CPPUNIT_ASSERT_MESSAGE("solver stats are not removed", stats->size(s) == 2);
+		CPPUNIT_ASSERT_MESSAGE("solver stats remain valid", stats->at(s, 1) == s1);
+		CPPUNIT_ASSERT(stats->value(s1c) == 0.0);
+		CPPUNIT_ASSERT(stats->value(s0c) == stats->value(stats->get(stats->root(), "solving.solvers.choices")));
+		config.solve.algorithm.threads = 2;
+		libclasp.update(true);
+		libclasp.solve();
+		CPPUNIT_ASSERT(stats->value(s1c) + stats->value(s0c) == stats->value(stats->get(stats->root(), "solving.solvers.choices")));
+	}
 	void testShareModeRegression() {
 		Clasp::ClaspFacade libclasp;
 		Clasp::ClaspConfig config;
 		config.shareMode = ContextParams::share_auto;
 		config.solve.algorithm.threads = 2;
-		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c");
-		asp.startRule(Clasp::Asp::CHOICERULE).addHead(1).addHead(2).addHead(3).endRule();
+		libclasp.startSat(config).prepareProblem(2);
 		libclasp.prepare();
-		CPPUNIT_ASSERT_EQUAL(true, libclasp.ctx.physicalShare(Constraint_t::static_constraint));
-		CPPUNIT_ASSERT_EQUAL(true, libclasp.ctx.physicalShare(Constraint_t::learnt_conflict));
+		CPPUNIT_ASSERT_EQUAL(true, libclasp.ctx.physicalShare(Constraint_t::Static));
+		CPPUNIT_ASSERT_EQUAL(true, libclasp.ctx.physicalShare(Constraint_t::Conflict));
 	}
 	typedef ClaspFacade::AsyncResult AsyncResult;
 	void testAsyncSolveTrivialUnsat() {
 		ClaspConfig config;
 		ClaspFacade libclasp;
 		config.solve.numModels = 0;
-		Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a");
-		asp.startRule().addHead(1).addToBody(1, false).endRule();
+		lpAdd(libclasp.startAsp(config, true), "x1 :- not x1.");
 		libclasp.prepare();
 		AsyncResult it = libclasp.startSolveAsync();
 		CPPUNIT_ASSERT(it.end());
@@ -641,11 +960,9 @@ public:
 		ClaspConfig config;
 		ClaspFacade libclasp;
 		config.solve.numModels = 0;
-		Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a");
-		asp.startRule(Asp::CHOICERULE).addHead(1).endRule();
+		lpAdd(libclasp.startAsp(config, true), "{x1}.");
 		libclasp.prepare();
-		libclasp.terminate(2);
+		libclasp.interrupt(2);
 		AsyncResult it = libclasp.startSolveAsync();
 		CPPUNIT_ASSERT(it.end());
 		CPPUNIT_ASSERT(it.get().interrupted());
@@ -654,9 +971,7 @@ public:
 		ClaspConfig config;
 		ClaspFacade libclasp;
 		config.solve.numModels = 0;
-		Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a");
-		asp.startRule(Asp::CHOICERULE).addHead(1).endRule();
+		lpAdd(libclasp.startAsp(config, true), "{x1}.");
 		libclasp.prepare();
 		AsyncResult it = libclasp.startSolveAsync();
 		while (!it.end()) { 
@@ -674,33 +989,27 @@ public:
 	void testAsyncResultDtorCancelsOp() {
 		ClaspConfig config;
 		ClaspFacade libclasp;
-		Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a");
-		asp.startRule(Asp::CHOICERULE).addHead(1).endRule();
+		lpAdd(libclasp.startAsp(config, true), "{x1}.");
 		libclasp.prepare();
 		{ AsyncResult it = libclasp.startSolveAsync(); }
 		CPPUNIT_ASSERT(!libclasp.solving() && libclasp.result().interrupted());
 	}
 	void testDestroyAsyncResultNoFacade() {
-		ClaspConfig  config;
-		AsyncResult* handle   = 0;
-		ClaspFacade* libclasp = new ClaspFacade();
-		Asp::LogicProgram& asp= libclasp->startAsp(config, true);
-		asp.setAtomName(1, "a");
-		asp.startRule(Asp::CHOICERULE).addHead(1).endRule();
-		libclasp->prepare();
-		handle = new AsyncResult( libclasp->startSolveAsync() );
-		delete libclasp;
-		CPPUNIT_ASSERT(handle->interrupted());
-		CPPUNIT_ASSERT_NO_THROW(delete handle);
+		{
+			ClaspConfig  config;
+			ClaspFacade* libclasp = new ClaspFacade();
+			lpAdd(libclasp->startAsp(config, true), "{x1}.");
+			libclasp->prepare();
+			AsyncResult res( libclasp->startSolveAsync() );
+			delete libclasp;
+			CPPUNIT_ASSERT(res.interrupted());
+		}
 	}
 	void testDestroyDanglingAsyncResult() {
 		ClaspConfig  config;
 		ClaspFacade  libclasp;
 		AsyncResult* handle = 0;
-		Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a");
-		asp.startRule(Asp::CHOICERULE).addHead(1).endRule();
+		lpAdd(libclasp.startAsp(config, true), "{x1}.");
 		libclasp.prepare();
 		handle = new AsyncResult( libclasp.solveAsync() );
 		handle->wait();
@@ -713,12 +1022,10 @@ public:
 		CPPUNIT_ASSERT(!libclasp.solving());
 	}
 	void testCancelDanglingAsyncOperation() {
-		ClaspConfig  config;
-		ClaspFacade  libclasp;
+		ClaspConfig config;
+		ClaspFacade libclasp;
 		
-		Asp::LogicProgram& asp = libclasp.startAsp(config, true);
-		asp.setAtomName(1, "a");
-		asp.startRule(Asp::CHOICERULE).addHead(1).endRule();
+		lpAdd(libclasp.startAsp(config, true), "{x1}.");
 		libclasp.prepare();
 		AsyncResult step0 = libclasp.solveAsync();
 		step0.wait();
@@ -732,7 +1039,484 @@ public:
 		CPPUNIT_ASSERT(!libclasp.solving());
 	}
 #endif
+	void testGenSolveTrivialUnsat() {
+		ClaspConfig config;
+		ClaspFacade libclasp;
+		config.solve.numModels = 0;
+		lpAdd(libclasp.startAsp(config, true), "x1 :- not x1.");
+		libclasp.prepare();
+		ClaspFacade::ModelGenerator it = libclasp.startSolve();
+		CPPUNIT_ASSERT(!it.next());
+		CPPUNIT_ASSERT(it.result().exhausted());
+	}
+	void testInterruptBeforeGenSolve() {
+		ClaspConfig config;
+		ClaspFacade libclasp;
+		config.solve.numModels = 0;
+		lpAdd(libclasp.startAsp(config, true), "{x1}.");
+		libclasp.prepare();
+		libclasp.interrupt(2);
+		ClaspFacade::ModelGenerator it = libclasp.startSolve();
+		CPPUNIT_ASSERT(!it.next());
+		CPPUNIT_ASSERT(it.result().interrupted());
+	}
+	void testGenSolveWithLimit() {
+		ClaspConfig config;
+		ClaspFacade libclasp;
+		lpAdd(libclasp.startAsp(config, true), "{x1;x2;x3}.");
+		libclasp.prepare();
+		for (int i = 1; i != 9; ++i) {
+			unsigned got = 0, exp = i;
+			config.solve.numModels = i % 8;
+			libclasp.update(true);
+			ClaspFacade::ModelGenerator it = libclasp.startSolve();
+			while (it.next()) { 
+				CPPUNIT_ASSERT(got != exp);
+				++got; 
+			}
+			CPPUNIT_ASSERT_EQUAL(exp, got);
+		}
+	}
+
+	void testCancelGenSolve() {
+		ClaspConfig config;
+		ClaspFacade libclasp;
+		config.solve.numModels = 0;
+		lpAdd(libclasp.startAsp(config, true), "{x1}.");
+		libclasp.prepare();
+		ClaspFacade::ModelGenerator it = libclasp.startSolve();
+		unsigned mod = 0;
+		while (it.next()) {
+			CPPUNIT_ASSERT(it.model().num == ++mod);
+			it.stop();
+			break;
+		}
+		CPPUNIT_ASSERT(!libclasp.solving() && !it.result().exhausted() && mod == 1);
+		libclasp.update();
+		libclasp.prepare();
+		mod = 0;
+		for (ClaspFacade::ModelGenerator j = libclasp.startSolve(); j.next(); ++mod) {
+			;
+		}
+		CPPUNIT_ASSERT(!libclasp.solving() && mod == 2);
+	}
+	void testGenDtorCancelsSolve() {
+		ClaspConfig config;
+		ClaspFacade libclasp;
+		lpAdd(libclasp.startAsp(config, true), "{x1}.");
+		libclasp.prepare();
+		{ libclasp.startSolve(); }
+		CPPUNIT_ASSERT(!libclasp.solving() && !libclasp.result().exhausted());
+	}
+#if WITH_THREADS
+	void testGenSolveMt() {
+		ClaspConfig config;
+		ClaspFacade libclasp;
+		config.solve.numModels = 0;
+		config.solve.algorithm.threads = 2;
+		lpAdd(libclasp.startAsp(config, true), "{x1}.");
+		libclasp.prepare();
+		int mod = 0;
+		for (ClaspFacade::ModelGenerator it = libclasp.startSolve(); it.next(); ++mod) {
+			;
+		}
+		CPPUNIT_ASSERT(!libclasp.solving() && mod == 2);
+	}
+#endif
+	void testUserConfigurator() {
+		ClaspConfig config;
+		struct MyAddPost : public ClaspConfig::Configurator {
+			MyAddPost() : called(false) {}
+			virtual bool addPost(Solver&) { return called = true; }
+			bool called;
+		} myAddPost;
+		config.addConfigurator(&myAddPost);
+		ClaspFacade libclasp;
+		lpAdd(libclasp.startAsp(config, true), "{x1}.");
+		libclasp.prepare();
+		CPPUNIT_ASSERT_EQUAL(true, myAddPost.called);
+	}
+	void testUserHeuristic() {
+		struct MyHeu {
+			static DecisionHeuristic* creator(Heuristic_t::Type, const HeuParams&) { throw MyHeu(); }
+		};
+		ClaspConfig config;
+		config.setHeuristicCreator(&MyHeu::creator);
+		ClaspFacade libclasp;
+		lpAdd(libclasp.startAsp(config, true), "{x1}.");
+		CPPUNIT_ASSERT_THROW(libclasp.prepare(), MyHeu);
+	}
 };
 CPPUNIT_TEST_SUITE_REGISTRATION(FacadeTest);
-} } 
 
+class MyProp : public Potassco::AbstractPropagator {
+public:
+	MyProp() : fire(lit_false()), clProp(Potassco::Clause_t::Learnt) {}
+	virtual void propagate(Potassco::AbstractSolver& s, const ChangeList& changes) {
+		map(changes);
+		addClause(s);
+	}
+	virtual void undo(const Potassco::AbstractSolver&, const ChangeList& changes) {
+		map(changes);
+	}
+	virtual void check(Potassco::AbstractSolver& s) {
+		const Potassco::AbstractAssignment& assign = s.assignment();
+		for (Potassco::LitVec::const_iterator it = clause.begin(), end = clause.end(); it != end; ++it) {
+			if (assign.isTrue(*it)) { return; }
+		}
+		if (!clause.empty()) { s.addClause(Potassco::toSpan(clause)); }
+	}
+	void map(const ChangeList& changes) {
+		change.clear();
+		for (const Potassco::Lit_t* x = Potassco::begin(changes); x != Potassco::end(changes); ++x) {
+			change.push_back(decodeLit(*x));
+		}
+	}
+	bool addClause(Potassco::AbstractSolver& s) {
+		if (!s.assignment().isTrue(encodeLit(fire))) {
+			return true;
+		}
+		return s.addClause(Potassco::toSpan(clause), clProp) && s.propagate();
+	}
+	void addToClause(Literal x) {
+		clause.push_back(encodeLit(x));
+	}
+	Literal  fire;
+	LitVec change;
+	Potassco::LitVec   clause;
+	Potassco::Clause_t clProp;
+};
+class ClingoPropagatorTest : public CppUnit::TestFixture {
+	CPPUNIT_TEST_SUITE(ClingoPropagatorTest);
+	CPPUNIT_TEST(testAssignment);
+	CPPUNIT_TEST(testPropagateChange);
+	CPPUNIT_TEST(testAddClause);
+	CPPUNIT_TEST(testAddUnitClause);
+	CPPUNIT_TEST(testAddUnitClauseWithUndo);
+	CPPUNIT_TEST(testAddUnsatClause);
+	CPPUNIT_TEST(testAttachToSolver);
+	CPPUNIT_TEST(testAddClauseOnModel);
+	CPPUNIT_TEST(testAddConflictOnModel);
+	CPPUNIT_TEST(testAddStatic);
+	CPPUNIT_TEST(testAddVolatile);
+	CPPUNIT_TEST(testAddVolatileStatic);
+	CPPUNIT_TEST(testRootLevelBug);
+	CPPUNIT_TEST(testLookaheadBug);
+	CPPUNIT_TEST_SUITE_END();
+public:
+	void setUp() {
+		tp = new Clasp::ClingoPropagatorInit(prop);
+	}
+	void tearDown() {
+		delete tp;
+	}
+	void testAssignment() {
+		class Prop : public Potassco::AbstractPropagator {
+		public:
+			Prop() {}
+			virtual void propagate(Potassco::AbstractSolver&, const ChangeList&)  {}
+			virtual void undo(const Potassco::AbstractSolver&, const ChangeList&) {}
+			virtual void check(Potassco::AbstractSolver& s) {
+				const Potassco::AbstractAssignment& a = s.assignment();
+				CPPUNIT_ASSERT(!a.hasConflict());
+				CPPUNIT_ASSERT(a.level() == 2);
+				CPPUNIT_ASSERT(a.value(v1) == Potassco::Value_t::True);
+				CPPUNIT_ASSERT(a.value(v2) == Potassco::Value_t::False);
+				CPPUNIT_ASSERT(a.isTrue(v1));
+				CPPUNIT_ASSERT(a.isFalse(v2));
+				CPPUNIT_ASSERT(a.isTrue(Potassco::neg(v2)));
+				CPPUNIT_ASSERT(a.level(v1) == 1);
+				CPPUNIT_ASSERT(a.level(v2) == 2);
+				CPPUNIT_ASSERT(!a.hasLit(v2+1));
+				CPPUNIT_ASSERT(a.decision(0) == encodeLit(lit_true()));
+				CPPUNIT_ASSERT(a.decision(1) == v1);
+				CPPUNIT_ASSERT(a.decision(2) == Potassco::neg(v2));
+			}
+			Potassco::Lit_t v1, v2;
+		} prop;
+		addVars(2);
+		prop.v1 = encodeLit(posLit(v[1]));
+		prop.v2 = encodeLit(posLit(v[2]));
+		MyInit pp(prop);
+		pp.addPost(*ctx.master());
+		ctx.endInit();
+		ctx.master()->assume(posLit(v[1])) && ctx.master()->propagate();
+		ctx.master()->assume(negLit(v[2])) && ctx.master()->propagate();
+		ctx.master()->search(0, 0);
+	}
+
+	void testPropagateChange() {
+		addVars(5);
+		tp->addWatch(posLit(v[1]));
+		tp->addWatch(posLit(v[1])); // ignore duplicates
+		tp->addWatch(posLit(v[2]));
+		tp->addWatch(posLit(v[3]));
+		tp->addWatch(negLit(v[3]));
+		tp->addWatch(negLit(v[4]));
+		tp->addPost(*ctx.master());
+		ctx.endInit();
+		Solver& s = *ctx.master();
+		s.assume(posLit(v[1])) && s.propagate();
+		CPPUNIT_ASSERT(prop.change.size() == 1 && prop.change[0] == posLit(v[1]));
+
+		s.assume(negLit(v[4])) && s.force(posLit(v[2]), 0) && s.propagate();
+		CPPUNIT_ASSERT(prop.change.size() == 2 && prop.change[0] == negLit(v[4]) && prop.change[1] == posLit(v[2]));
+		prop.change.clear();
+		s.undoUntil(s.decisionLevel()-1);
+		CPPUNIT_ASSERT(prop.change.size() == 2 && prop.change[0] == negLit(v[4]) && prop.change[1] == posLit(v[2]));
+		s.undoUntil(s.decisionLevel()-1);
+		CPPUNIT_ASSERT(prop.change.size() == 1 && prop.change[0] == posLit(v[1]));
+		prop.change.clear();
+		s.assume(negLit(v[2])) && s.propagate();
+		CPPUNIT_ASSERT(prop.change.empty());
+	}
+	void testAddClause() {
+		addVars(3);
+		tp->addWatch(prop.fire = negLit(v[3]));
+		prop.addToClause(posLit(v[1]));
+		prop.addToClause(posLit(v[2]));
+		tp->addPost(*ctx.master());
+		ctx.endInit();
+		Solver& s = *ctx.master();
+		s.assume(negLit(v[3])) && s.propagate();
+		CPPUNIT_ASSERT(ctx.numLearntShort() == 1);
+	}
+	void testAddUnitClause() {
+		addVars(3);
+		tp->addWatch(prop.fire = negLit(v[3]));
+		prop.addToClause(posLit(v[1]));
+		prop.addToClause(posLit(v[2]));
+		tp->addPost(*ctx.master());
+		ctx.endInit();
+		Solver& s = *ctx.master();
+		s.assume(negLit(v[2])) && s.propagate();
+		s.assume(negLit(v[3])) && s.propagate();
+		CPPUNIT_ASSERT(ctx.numLearntShort() == 1);
+		CPPUNIT_ASSERT(s.isTrue(posLit(v[1])));
+		CPPUNIT_ASSERT(prop.change.size() == 1 && prop.change[0] == negLit(v[3]));
+	}
+	void testAddUnitClauseWithUndo() {
+		addVars(5);
+		prop.fire = posLit(v[5]);
+		tp->addWatch(posLit(v[3]));
+		tp->addWatch(posLit(v[5]));
+		prop.addToClause(posLit(v[1]));
+		prop.addToClause(posLit(v[2]));
+		prop.addToClause(posLit(v[3]));
+		tp->addPost(*ctx.master());
+		ctx.endInit();
+		Solver& s = *ctx.master();
+		s.assume(negLit(v[1])) && s.propagate();
+		s.assume(posLit(v[4])) && s.propagate();
+		s.assume(negLit(v[2])) && s.propagate();
+		s.assume(posLit(v[5])) && s.propagate();
+		CPPUNIT_ASSERT(ctx.numLearntShort() == 1);
+		CPPUNIT_ASSERT(s.decisionLevel() == 3);
+		s.undoUntil(2);
+		CPPUNIT_ASSERT(std::find(prop.change.begin(), prop.change.end(), posLit(v[3])) != prop.change.end());
+	}
+	void testAddUnsatClause() {
+		addVars(3);
+		tp->addWatch(prop.fire = negLit(v[3]));
+		prop.addToClause(posLit(v[1]));
+		prop.addToClause(posLit(v[2]));
+		tp->addPost(*ctx.master());
+		ctx.endInit();
+		Solver& s = *ctx.master();
+		s.assume(negLit(v[2])) && s.propagate();
+		s.assume(negLit(v[1])) && s.propagate();
+		s.assume(negLit(v[3]));
+		s.pushRootLevel(2);
+		CPPUNIT_ASSERT_EQUAL(false, s.propagate());
+		CPPUNIT_ASSERT_MESSAGE("do not add conflicting constraint", ctx.numLearntShort() == 0);
+		s.popRootLevel(1);
+		CPPUNIT_ASSERT(s.decisionLevel() == 1);
+		prop.clause.clear();
+		prop.addToClause(negLit(v[2]));
+		prop.addToClause(posLit(v[3]));
+		s.assume(negLit(v[3]));
+		CPPUNIT_ASSERT_EQUAL(true, s.propagate());
+		CPPUNIT_ASSERT_MESSAGE("do not add sat constraint", ctx.numLearntShort() == 0);
+	}
+	void testAttachToSolver() {
+		ClaspConfig config;
+		ClaspFacade libclasp;
+		config.addConfigurator(tp);
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp, "{x1;x2}.");
+		asp.endProgram();
+		for (Var v = 1; v <= libclasp.ctx.numVars(); ++v) {
+			tp->addWatch(posLit(v));
+			tp->addWatch(negLit(v));
+		}
+		CPPUNIT_ASSERT(prop.change.empty());
+		libclasp.prepare();
+		libclasp.solve();
+		CPPUNIT_ASSERT(!prop.change.empty());
+#if WITH_THREADS
+		config.solve.setSolvers(2);
+		libclasp.update(true);
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.ctx.concurrency() == 2 && libclasp.ctx.hasSolver(1));
+		libclasp.solve();
+		CPPUNIT_ASSERT(libclasp.ctx.solver(1)->getPost(PostPropagator::priority_class_general) != 0);
+		config.solve.setSolvers(1);
+		libclasp.update(true);
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.ctx.concurrency() == 1);
+		config.solve.setSolvers(2);
+		libclasp.update(true);
+		libclasp.solve();
+		CPPUNIT_ASSERT(libclasp.ctx.solver(1)->getPost(PostPropagator::priority_class_general) != 0);
+#endif
+	}
+	void testAddClauseOnModel() {
+		addVars(3);
+		prop.addToClause(posLit(v[1]));
+		prop.addToClause(posLit(v[3]));
+		tp->addPost(*ctx.master());
+		ctx.endInit();
+		Solver& s = *ctx.master();
+		ValueRep v = s.search(-1, -1);
+		CPPUNIT_ASSERT(v == value_true && s.numFreeVars() == 0);
+		CPPUNIT_ASSERT(ctx.shortImplications().numLearnt() == 1);
+	}
+	void testAddConflictOnModel() {
+		addVars(3);
+		prop.addToClause(negLit(v[1]));
+		prop.addToClause(negLit(v[2]));
+		tp->addPost(*ctx.master());
+		ctx.endInit();
+		Solver& s = *ctx.master();
+		s.assume(posLit(v[1]));
+		s.force(posLit(v[2]), posLit(v[1]));
+		s.propagate();
+		s.assume(posLit(v[3])) && s.propagate();
+		CPPUNIT_ASSERT(!s.hasConflict() && s.numFreeVars() == 0);
+		CPPUNIT_ASSERT(!s.getPost(PostPropagator::priority_class_general)->isModel(s));
+		CPPUNIT_ASSERT(s.hasConflict());
+		CPPUNIT_ASSERT(s.decisionLevel() == 1 && s.resolveConflict());
+	}
+	
+	void testAddStatic() {
+		addVars(2);
+		prop.addToClause(posLit(v[1]));
+		prop.addToClause(posLit(v[2]));
+		prop.fire   = lit_true();
+		prop.clProp = Potassco::Clause_t::Static;
+		tp->addWatch(negLit(v[1]));
+		tp->addPost(*ctx.master());
+		ctx.endInit();
+
+		Solver& s = *ctx.master();
+		CPPUNIT_ASSERT(s.numWatches(negLit(v[2])) == 0);
+		s.assume(negLit(v[1])) && s.propagate();
+		CPPUNIT_ASSERT(s.numWatches(negLit(v[2])) == 1);
+		s.reduceLearnts(1.0);
+		CPPUNIT_ASSERT(s.numWatches(negLit(v[2])) == 1);
+	}
+	
+	void testAddVolatile() {
+		ClaspConfig config;
+		ClaspFacade libclasp;
+		config.addConfigurator(tp);
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp, "{x1;x2}.");
+		asp.endProgram();
+		tp->addWatch(negLit(1));
+		prop.addToClause(posLit(1));
+		prop.addToClause(posLit(2));
+		libclasp.prepare();
+		prop.fire = libclasp.ctx.stepLiteral();
+		prop.clProp = Potassco::Clause_t::Volatile;
+		libclasp.solve();
+		CPPUNIT_ASSERT(libclasp.ctx.numLearntShort() == 1);
+		libclasp.update();
+		CPPUNIT_ASSERT(libclasp.ctx.numLearntShort() == 0);
+	}
+	void testAddVolatileStatic() {
+		ClaspConfig config;
+		ClaspFacade libclasp;
+		config.addConfigurator(tp);
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp, "{x1;x2}.");
+		asp.endProgram();
+		tp->addWatch(negLit(1));
+		prop.addToClause(posLit(1));
+		prop.addToClause(posLit(2));
+		libclasp.prepare();
+		prop.fire = libclasp.ctx.stepLiteral();
+		prop.clProp = Potassco::Clause_t::VolatileStatic;
+		libclasp.solve();
+		CPPUNIT_ASSERT(libclasp.ctx.master()->numWatches(negLit(2)) == 1);
+		libclasp.update();
+		CPPUNIT_ASSERT(libclasp.ctx.master()->numWatches(negLit(2)) == 0);
+	}
+
+	void testRootLevelBug() {
+		class Prop : public Potassco::AbstractPropagator {
+		public:
+			Prop() {}
+			virtual void propagate(Potassco::AbstractSolver& s, const ChangeList&) {
+				CPPUNIT_ASSERT(s.assignment().level() != 0);
+				for (Potassco::Atom_t a = 2; a != 4; ++a) {
+					Potassco::Lit_t pos = a;
+					Potassco::Lit_t neg = -pos;
+					if (!s.addClause(Potassco::toSpan(&pos, 1))) { return; }
+					if (!s.addClause(Potassco::toSpan(&neg, 1))) { return; }
+				}
+			}
+			virtual void undo(const Potassco::AbstractSolver&, const ChangeList&) {}
+			virtual void check(Potassco::AbstractSolver&) {}
+		} prop;
+		MyInit pp(prop);
+		ClaspConfig config;
+		ClaspFacade libclasp;
+		config.addConfigurator(&pp);
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		lpAdd(asp, "{x1;x2}.");
+		asp.endProgram();
+		pp.addWatch(posLit(1));
+		pp.addWatch(negLit(1));
+		pp.addWatch(posLit(2));
+		pp.addWatch(negLit(2));
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.solve().unsat());
+	}
+	void testLookaheadBug() {
+		ClaspConfig config;
+		ClaspFacade libclasp;
+		config.addConfigurator(tp);
+		config.addSolver(0).lookType = Var_t::Atom;
+		SatBuilder& sat = libclasp.startSat(config);
+		sat.prepareProblem(2);
+		LitVec clause;
+		clause.push_back(negLit(1));
+		clause.push_back(negLit(2));
+		sat.addClause(clause);
+		clause.pop_back();
+		clause.push_back(posLit(2));
+		sat.addClause(clause);
+		tp->addWatch(negLit(1));
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.ctx.master()->isTrue(negLit(1)));
+		CPPUNIT_ASSERT(prop.change.size() == 1);
+		CPPUNIT_ASSERT(prop.change[0] == negLit(1));
+	}
+private:
+	void addVars(int num) {
+		v.resize(num + 1);
+		v[0] = 0;
+		for (int i = 1; i <= num; ++i) {
+			v[i] = ctx.addVar(Var_t::Atom);
+		}
+		ctx.startAddConstraints();
+	}
+	typedef ClingoPropagatorInit MyInit;
+	SharedContext ctx;
+	MyProp        prop;
+	MyInit*       tp;
+	VarVec v;
+};
+CPPUNIT_TEST_SUITE_REGISTRATION(ClingoPropagatorTest);
+} } 

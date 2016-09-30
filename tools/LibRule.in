@@ -5,13 +5,16 @@ ifneq ($(MAKECMDGOALS),clean)
 -include $(DEPS)
 endif
 
+ifeq ($(MAKECMDGOALS),test)
+-include $(TEST_DEPS)
+endif
+
 .PHONY:	clean test
 
 test: $(TEST_TARGET)
-	$(TEST_TARGET)
 
-$(TEST_TARGET): $(TARGET) $(TEST_DEPS) $(TEST_OBJECTS) 
-	$(CXX) $(WARNFLAGS) $(CXXFLAGS) $(LDFLAGS) $(TEST_OBJECTS) $(LIBS) $(LDLIBS) $(TARGET) -lcppunit -o $(TEST_TARGET)
+$(TEST_TARGET): $(TARGET) $(TEST_DEPS) $(TEST_OBJECTS)
+	$(AR)  cvrs $(TEST_TARGET) $(TEST_OBJECTS)
 
 ifeq ($(findstring Windows,$(OS)),)
 clean:

@@ -31,7 +31,7 @@ class ModelHandler : public Clasp::EventHandler {
 public:
 	ModelHandler() {}
 	bool onModel(const Clasp::Solver& s, const Clasp::Model& m) {
-		printModel(s.symbolTable(), m);
+		printModel(s.outputTable(), m);
 		// exclude this model
 		Clasp::LitVec clause;
 		for (uint32 i = 1; i <= s.decisionLevel(); ++i) {
@@ -50,10 +50,7 @@ void example4() {
 	Clasp::ClaspFacade libclasp;
 
 	Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config);
-	asp.setAtomName(1, "a");
-	asp.setAtomName(2, "b");
-	asp.startRule(Clasp::Asp::BASICRULE).addHead(1).addToBody(2, false).endRule();
-	asp.startRule(Clasp::Asp::BASICRULE).addHead(2).addToBody(1, false).endRule();
+	addSimpleProgram(asp);
 	
 	libclasp.prepare();
 

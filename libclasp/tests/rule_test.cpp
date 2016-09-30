@@ -17,18 +17,36 @@
 // along with Clasp; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
+#ifdef _MSC_VER
+#pragma warning (disable: 4996)
+#endif
 #include "test.h"
-#include <clasp/logic_program.h>
+#include "lpcompare.h"
 #include <clasp/solver.h>
 #include <utility>
 namespace Clasp { namespace Test {
 using namespace Clasp::Asp;
+static bool operator==(const Potassco::LitSpan& lhs, const Potassco::LitSpan& rhs) {
+	return lhs.size == rhs.size && std::equal(Potassco::begin(lhs), Potassco::end(lhs), Potassco::begin(rhs));
+}
+static bool operator==(const Potassco::Sum_t& lhs, const Potassco::Sum_t rhs) {
+	return lhs.bound == rhs.bound && lhs.lits.size == rhs.lits.size && std::equal(Potassco::begin(lhs.lits), Potassco::end(lhs.lits), Potassco::begin(rhs.lits));
+}
+static bool operator==(const Rule& lhs, const Rule& rhs) {
+	return lhs.ht == rhs.ht && lhs.head.size == rhs.head.size && std::equal(Potassco::begin(lhs.head), Potassco::end(lhs.head), rhs.head.first)
+		&&   lhs.normal() == rhs.normal() && (lhs.normal() ? lhs.cond == rhs.cond : lhs.agg == rhs.agg);
+}
+static bool operator==(Potassco::RuleBuilder& rb, const Rule& rhs) {
+	return rb.rule() == rhs;
+}
+
 class RuleTest : public CppUnit::TestFixture {
   CPPUNIT_TEST_SUITE(RuleTest);
 	CPPUNIT_TEST(testHashIgnoresOrder);
 	CPPUNIT_TEST(testRemoveDuplicateInNormal);
 	CPPUNIT_TEST(testMergeDuplicateInExtended);
 	CPPUNIT_TEST(testContraNormal);
+
 	CPPUNIT_TEST(testNoContraExtended);
 	CPPUNIT_TEST(testContraExtended);
 	CPPUNIT_TEST(testMultiSimplify);
@@ -36,109 +54,84 @@ class RuleTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testNormalIfMinWeightNeeded);
 	CPPUNIT_TEST(testSelfblockNormal);
 	CPPUNIT_TEST(testTautNormal);
-
+	
 	CPPUNIT_TEST(testTrivialDisjunctive);
 	CPPUNIT_TEST(testEmptyDisjunctive);
 	CPPUNIT_TEST(testDisjunctive);
 	CPPUNIT_TEST(testRemoveDuplicateInDisjunctive);
 	CPPUNIT_TEST(testDisjunctiveTAUT);
 	CPPUNIT_TEST(testDisjunctiveBLOCK);
+	CPPUNIT_TEST(testDisjunctiveBLOCKALL);
 	CPPUNIT_TEST_SUITE_END();
 
 public:
 	void setUp() {
 		prg.startProgram(ctx);
-		body.reset();
-		head.clear();
 	}
-
 	void testHashIgnoresOrder() {
-		Rule r1, r2, r3;
-		BodyInfo info1, info2, info3;
-		r1.setType(BASICRULE).addHead(1).addToBody(10, false).addToBody(20, true).addToBody(25, true);
-		r2.setType(BASICRULE).addHead(1).addToBody(20, true).addToBody(25, true).addToBody(10, false);
-		r3.setType(BASICRULE).addHead(1).addToBody(25, true).addToBody(10, false).addToBody(20, true);
-		prg.simplifyRule(r1, head, info1);
-		prg.simplifyRule(r2, head, info2);
-		prg.simplifyRule(r3, head, info3);
+		RuleBuilder r1, r2, r3;
+		LogicProgram::SRule info1, info2, info3;
+		r1.start().addHead(1).addGoal(Potassco::neg(10)).addGoal(20).addGoal(25).end();
+		r2.start().addHead(1).addGoal(20).addGoal(25).addGoal(Potassco::neg(10)).end();
+		r3.start().addHead(1).addGoal(25).addGoal(Potassco::neg(10)).addGoal(20).end();
+		prg.simplifyRule(r1.rule(), mem, info1);
+		prg.simplifyRule(r2.rule(), mem, info2);
+		prg.simplifyRule(r3.rule(), mem, info3);
 		CPPUNIT_ASSERT(info1.hash == info2.hash && info2.hash == info3.hash);
+		CPPUNIT_ASSERT(info1.pos == info2.pos && info2.pos == info3.pos);
 	}
 
 	void testRemoveDuplicateInNormal() {
 		// a :- b, b, not c -> a :- b, not c.
-		rule.setType(BASICRULE).addHead(1).addToBody(2, true).addToBody(2, true).addToBody(3, false);
-		prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(2 == body.size());
-		CPPUNIT_ASSERT(1 == body.posSize());
+		rule.start(Head_t::Disjunctive).addHead(1).addGoal(2).addGoal(2).addGoal(Potassco::neg(3)).end();
+		prg.simplifyRule(rule.rule(), mem, meta);
+		CPPUNIT_ASSERT(1 == meta.pos);
+		CPPUNIT_ASSERT(rule.start().addHead(1).addGoal(2).addGoal(Potassco::neg(3)) == mem.rule());
 	}
 
 	void testMergeDuplicateInExtended() {
 		// a :- 2 {b, not c, b} -> a :- 2 [b=2, not c].
-		rule.setType(CONSTRAINTRULE).setBound(2).addHead(1).addToBody(2, true).addToBody(3, false).addToBody(2, true);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(2 == body.size());
-		CPPUNIT_ASSERT(1 == body.posSize());
-		CPPUNIT_ASSERT(body[0].second == 2);
-		CPPUNIT_ASSERT(t == WEIGHTRULE);
-		CPPUNIT_ASSERT(body[1].second == 1);
-
-		
-		rule.clear(), body.reset();
-		// {b, not c, b} -> [b=2, not c].
-		rule.setType(OPTIMIZERULE).addToBody(2, true).addToBody(3, false).addToBody(2, true);
-		t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(2 == body.size());
-		CPPUNIT_ASSERT(1 == body.posSize());
-		CPPUNIT_ASSERT(body[0].second == 2);
-		CPPUNIT_ASSERT(t == OPTIMIZERULE);
-		CPPUNIT_ASSERT(body[1].second == 1);
+		rule.addHead(1).startSum(2).addGoal(2).addGoal(Potassco::neg(3)).addGoal(2).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		CPPUNIT_ASSERT(1 == meta.pos);
+		CPPUNIT_ASSERT(rule.start().addHead(1).startSum(2).addGoal(2, 2).addGoal(Potassco::neg(3)) == mem.rule());
 	}
-
 	void testContraNormal() {
 		// a :- b, c, not b.
-		rule.setType(BASICRULE).addHead(1).addToBody(2, true).addToBody(3, true).addToBody(2, false);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == ENDRULE);
+		rule.start().addHead(1).addGoal(2).addGoal(3).addGoal(Potassco::neg(2)).end();
+		CPPUNIT_ASSERT(!prg.simplifyRule(rule.rule(), mem, meta));
 	}
 
 	void testNoContraExtended() {
 		// a :- 2 {b, c, not b}.
-		rule.setType(CONSTRAINTRULE).setBound(2).addHead(1).addToBody(2, true).addToBody(3, true).addToBody(2, false);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == CONSTRAINTRULE);
+		rule.addHead(1).startSum(2).addGoal(2).addGoal(3).addGoal(Potassco::neg(2)).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		Rule r = mem.rule();
+		CPPUNIT_ASSERT(r.bt == Body_t::Count);
 
 		// a :- 4 {not b, b, b, c, d}.
-		rule.clear(), body.reset();
-		rule.setType(CONSTRAINTRULE).setBound(4).addHead(1).addToBody(2, false).addToBody(2, true).addToBody(2, true).addToBody(3, true).addToBody(4, true);
-		t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == WEIGHTRULE);
-		CPPUNIT_ASSERT(head[0] == 1);
+		rule.start().addHead(1).startSum(4).addGoal(Potassco::neg(2)).addGoal(2).addGoal(2).addGoal(3).addGoal(4).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		r = mem.rule();
+		CPPUNIT_ASSERT(r.bt == Body_t::Sum);
+		CPPUNIT_ASSERT(r.head[0] == 1);
 		
-
-		rule.clear(), body.reset();
 		// a :- 4 [b=2, c=1, not b=1, not c=2].
-		rule.setType(WEIGHTRULE).setBound(4).addHead(1).addToBody(2, true, 2).addToBody(3, true).addToBody(2, false).addToBody(3, false, 2);
-		t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == WEIGHTRULE);
-		CPPUNIT_ASSERT(head[0] == 1);
-
-		rule.clear(), body.reset();
-		rule.setType(OPTIMIZERULE).addToBody(1, true).addToBody(1, false);
-		t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == OPTIMIZERULE);
+		rule.start().addHead(1).startSum(4).addGoal(2, 2).addGoal(3).addGoal(Potassco::neg(2)).addGoal(Potassco::neg(3), 2).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		r = mem.rule();
+		CPPUNIT_ASSERT(r.bt == Body_t::Sum);
+		CPPUNIT_ASSERT(r.head[0] == 1);
 	}
 
 	void testContraExtended() {
 		// a :- 3 {b, c, not b, not c}.
-		rule.setType(CONSTRAINTRULE).setBound(3).addHead(1).addToBody(2, true).addToBody(3, true).addToBody(2, false).addToBody(3, false);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == ENDRULE);
+		rule.addHead(1).startSum(3).addGoal(2).addGoal(3).addGoal(Potassco::neg(2)).addGoal(Potassco::neg(3)).end();
+		CPPUNIT_ASSERT(!prg.simplifyRule(rule.rule(), mem, meta));
 
-		rule.clear(), body.reset();
 		// a :- 4 [b=2, c=1, not b=1, not c=1].
-		rule.setType(WEIGHTRULE).setBound(4).addHead(1).addToBody(2, true, 2).addToBody(3, true).addToBody(2, false).addToBody(3, false);
-		t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == ENDRULE);
+		rule.start().addHead(1).startSum(4).addGoal(2, 2).addGoal(3).addGoal(Potassco::neg(2)).addGoal(Potassco::neg(3)).end();
+		CPPUNIT_ASSERT(!prg.simplifyRule(rule.rule(), mem, meta));
 	}
 
 	void testMultiSimplify() {
@@ -146,121 +139,111 @@ public:
 		//  - remove 0 weights: 1 [d=2]
 		//  - bound weights   : 1 [d=1]
 		//  - flatten         : d.
-		rule.setType(WEIGHTRULE).addHead(1).setBound(1).addToBody(2, true).addToBody(3, true).addToBody(4, true, 2).addToBody(5, true);
-		rule.body[0].second = 0;
-		rule.body[1].second = 0;
-		rule.body[3].second = 0;
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == BASICRULE);
-		CPPUNIT_ASSERT(body.posSize() == 1);
+		rule.addHead(1).startSum(1).addGoal(2, 0).addGoal(3, 0).addGoal(4, 2).addGoal(5, 0).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		CPPUNIT_ASSERT(meta.pos == 1);
+		CPPUNIT_ASSERT(rule.start().addHead(1).addGoal(4) == mem.rule());
 	}
-
 	void testCardinalityIfAllWeightsEqual() {
 		// a :- 3 [b=2,c=2, d=2,e=0] -> 
-		rule.setType(WEIGHTRULE).addHead(1).setBound(3).addToBody(2, true, 2).addToBody(3, true, 2).addToBody(4, true, 2).addToBody(5, true);
-		rule.body[3].second = 0;
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t  == CONSTRAINTRULE);
-		CPPUNIT_ASSERT(body.bound() == 2);
-
-		rule.clear(), body.reset();
+		rule.addHead(1).startSum(3).addGoal(2, 2).addGoal(3, 2).addGoal(4, 2).addGoal(5, 0).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		CPPUNIT_ASSERT(rule.start().addHead(1).startSum(2).addGoal(2).addGoal(3).addGoal(4).end() == mem.rule());
+		
 		// a :- 2 [b=1,c=2 b=1] -> 1 {b,c}
-		rule.setType(WEIGHTRULE).addHead(1).setBound(2).addToBody(2, true, 1).addToBody(3, true, 2).addToBody(2, true, 1);
-		t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t  == CONSTRAINTRULE);
-		CPPUNIT_ASSERT(body.bound() == 1);
-
+		rule.start().addHead(1).startSum(2).addGoal(2, 1).addGoal(3, 2).addGoal(2, 1).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		CPPUNIT_ASSERT(rule.start().addHead(1).startSum(1).addGoal(2).addGoal(3) == mem.rule());
 	}
-	
+
 	void testNormalIfMinWeightNeeded() {
 		// a :- 8 [b=4,c=3, d=2,e=0] -> b,c,d
-		rule.setType(WEIGHTRULE).addHead(1).setBound(8).addToBody(2, true, 4).addToBody(3, true, 3).addToBody(4, true, 2).addToBody(5, true);
-		rule.body[3].second = 0;
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t  == BASICRULE);
-		CPPUNIT_ASSERT(body.size() == 3);
-		CPPUNIT_ASSERT(body.lits[0].second == 1);
-		CPPUNIT_ASSERT(body.lits[1].second == 1);
-		CPPUNIT_ASSERT(body.lits[2].second == 1);
+		rule.addHead(1).startSum(8).addGoal(2, 4).addGoal(3, 3).addGoal(4, 2).addGoal(5, 0).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		CPPUNIT_ASSERT(rule.start().addHead(1).addGoal(2).addGoal(3).addGoal(4).end() == mem.rule());
 	}
-
 	void testSelfblockNormal() {
 		// a :- not a.
-		rule.setType(BASICRULE);
-		rule.addHead(1).addToBody(1, false);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == BASICRULE && head[0] == 0);		
+		rule.start().addHead(1).addGoal(Potassco::neg(1)).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		CPPUNIT_ASSERT(rule.start().addGoal(Potassco::neg(1)).end() == mem.rule());
 	}	
 
 	void testTautNormal() {
 		// a :- a, b.
-		rule.setType(BASICRULE).addHead(1).addToBody(1, true).addToBody(2, true);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == ENDRULE && head.empty());
+		rule.start().addHead(1).addGoal(1).addGoal(2).end();
+		CPPUNIT_ASSERT(!prg.simplifyRule(rule.rule(), mem, meta));
 	}	
 
 	void testTrivialDisjunctive() {
 		// a :- x.
-		rule.setType(DISJUNCTIVERULE).addHead(1).addToBody(2, true);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == BASICRULE);
+		rule.start().addHead(1).addGoal(2).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
 	}
 	void testEmptyDisjunctive() {
-		rule.setType(DISJUNCTIVERULE).addToBody(2, true);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == ENDRULE);
+		rule.start().addGoal(2).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
 	}
+
 	void testDisjunctive() {
 		// a | b :- x.
-		rule.setType(DISJUNCTIVERULE).addHead(1).addHead(2).addToBody(3, true);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == DISJUNCTIVERULE && head.size() == 2);
+		rule.start().addHead(1).addHead(2).addGoal(3).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta) && rule == mem.rule());
 	}
-	
+
 	void testRemoveDuplicateInDisjunctive() {
 		// a | b | a :- x, x.
-		rule.setType(DISJUNCTIVERULE).addHead(1).addHead(2).addHead(1).addToBody(3, true).addToBody(3, true);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == DISJUNCTIVERULE && head.size() == 2);
-		CPPUNIT_ASSERT(body.size() == 1);
+		rule.start().addHead(1).addHead(2).addHead(1).addGoal(3).addGoal(3).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		CPPUNIT_ASSERT(rule.start().addHead(1).addHead(2).addGoal(3).end() == mem.rule());
 	}
-	
+
 	void testDisjunctiveTAUT() {
 		// a | b | c :- b, x.
-		rule.setType(DISJUNCTIVERULE).addHead(1).addHead(2).addHead(3).addToBody(4, true).addToBody(2, true);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == ENDRULE);
+		rule.start().addHead(1).addHead(2).addHead(3).addGoal(4).addGoal(2).end();
+		CPPUNIT_ASSERT(!prg.simplifyRule(rule.rule(), mem, meta));
 	}
 	
 	void testDisjunctiveBLOCK() {
 		// a | b | c :- x, not b.
-		rule.setType(DISJUNCTIVERULE).addHead(1).addHead(2).addHead(3).addToBody(4, true).addToBody(2, false);
-		RuleType t = prg.simplifyRule(rule, head, body);
-		CPPUNIT_ASSERT(t == DISJUNCTIVERULE && head.size() == 2);
+		rule.start().addHead(1).addHead(2).addHead(3).addGoal(4).addGoal(Potassco::neg(2)).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		CPPUNIT_ASSERT(rule.start().addHead(1).addHead(3).addGoal(4).addGoal(Potassco::neg(2)).end() == mem.rule());
+	}
+	void testDisjunctiveBLOCKALL() {
+		// a | b :- not a, not b.
+		rule.start().addHead(1).addHead(2).addGoal(Potassco::neg(1)).addGoal(Potassco::neg(2)).end();
+		CPPUNIT_ASSERT(prg.simplifyRule(rule.rule(), mem, meta));
+		CPPUNIT_ASSERT(rule.start().addGoal(Potassco::neg(1)).addGoal(Potassco::neg(2)).end() == mem.rule());
 	}
 private:
+	typedef Potassco::BasicStack BasicStack;
+	typedef LogicProgram::SRule SRule;
+	typedef Potassco::RuleBuilder RuleBuilder;
 	SharedContext ctx;
 	LogicProgram  prg;
-	VarVec        head;
-	BodyInfo      body;
-	Rule          rule;
+	RuleBuilder   mem;
+	RuleBuilder   rule;
+	SRule         meta;
 };
-
 class RuleTransformTest : public CppUnit::TestFixture {
   CPPUNIT_TEST_SUITE(RuleTransformTest);
 	CPPUNIT_TEST(testChoiceRuleEmpty);
 	CPPUNIT_TEST(testChoiceRuleOneHead);
 	CPPUNIT_TEST(testChoiceRuleUseExtraHead);
-	
+
 	CPPUNIT_TEST(testTrivialConstraintRule);
 	CPPUNIT_TEST(testUnsatConstraintRule);
+
 	CPPUNIT_TEST(testDegeneratedConstraintRule);
 	CPPUNIT_TEST(testBoundEqOneExp);
 	CPPUNIT_TEST(testBoundEqOneQuad);
 
 	CPPUNIT_TEST(testSixThreeExp);
 	CPPUNIT_TEST(testSixThreeQuad);
+	
 	CPPUNIT_TEST(testWeightSixFourExp);
+	CPPUNIT_TEST(testWeightFourExp);
 	CPPUNIT_TEST(testWeightSixFourQuad);
 	CPPUNIT_TEST(testWeightBug);
 	CPPUNIT_TEST(testDegeneratedWeightRule);
@@ -269,143 +252,109 @@ class RuleTransformTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testWeightBogusNormal);
 
 	CPPUNIT_TEST(testShiftDisjunction);
+
+	CPPUNIT_TEST(testMixedRule);
+	CPPUNIT_TEST(testDisjMixedRule);
+
 	CPPUNIT_TEST_SUITE_END();
 
 public:
 	void setUp() {
 		prg.start(ctx, LogicProgram::AspOptions().noEq().noScc());
-		prg.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c").setAtomName(4, "d")
-			 .setAtomName(5, "e").setAtomName(6, "f").setAtomName(7, "g");
+		for (Var v; (v = prg.newAtom()) != 7;) { ; }
 	}
 	void testChoiceRuleEmpty() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_choice);
-		rule.setType(CHOICERULE);
-		prg.addRule(rule);
-		CPPUNIT_ASSERT_EQUAL(0u, prg.stats.rules(CHOICERULE).second);
+		prg.addRule(Head_t::Choice, Potassco::toSpan<Atom_t>(), Potassco::toSpan<Potassco::Lit_t>());
+		CPPUNIT_ASSERT_EQUAL(0u, prg.stats.rules[1][RuleStats::Choice]);
 	}
 	void testChoiceRuleOneHead() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_choice);
-		
-		rule.setType(CHOICERULE);
-		rule.addHead(1);
-		prg.addRule(rule);
+		lpAdd(prg, "{a}.");;
 		
 		prg.endProgram();
-		std::ostringstream out;
-		prg.write(out);
 		std::stringstream exp;
 		exp << "1 1 1 1 8 \n"
 			  << "1 8 1 1 1 \n";
-		CPPUNIT_ASSERT(out.str().find(exp.str()) != std::string::npos);
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
 	}
 
 	void testChoiceRuleUseExtraHead() {
-		prg.startRule(CHOICERULE).addHead(4).addHead(5).addHead(6).addHead(7).endRule();
+		lpAdd(prg, "{d,e,f,g}.");
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_choice);
-		rule.setType(CHOICERULE);
-		// {a, b, c} :- d, e, not f, not g.
-		rule.addHead(1).addHead(2).addHead(3)
-			.addToBody(4, true).addToBody(5, true).addToBody(6, false).addToBody(7, false);
-
-		prg.addRule(rule);
+		lpAdd(prg, "{a,b,c} :- d, e, not f, not g.");
+		
 		prg.endProgram();
-		std::ostringstream out;
-		prg.write(out);
 		std::stringstream exp;
-		exp << "1 1 2 1 9 8 \n"      // a    :- auxBody, not auxA.
-		    << "1 9 1 1 1 \n"        // auxA :- not a.
-		    << "1 2 2 1 10 8 \n"     // b    :- auxBody, not auxB.
-		    << "1 10 1 1 2 \n"       // auxB :- not b.
-		    << "1 3 2 1 11 8 \n"     // c    :- auxBody, not auxC.
-		    << "1 11 1 1 3 \n"       // auxC :- not c.
-		    << "1 8 4 2 6 7 4 5 \n"; // auxB :- d, e, not f, not g.
-		CPPUNIT_ASSERT(out.str().find(exp.str()) != std::string::npos);
+		exp << "1 1 2 1 9 8\n"      // a    :- auxBody, not auxA.
+		    << "1 9 1 1 1\n"        // auxA :- not a.
+		    << "1 2 2 1 10 8\n"     // b    :- auxBody, not auxB.
+		    << "1 10 1 1 2\n"       // auxB :- not b.
+		    << "1 3 2 1 11 8\n"     // c    :- auxBody, not auxC.
+		    << "1 11 1 1 3\n"       // auxC :- not c.
+		    << "1 8 4 2 6 7 4 5\n"; // auxB :- d, e, not f, not g.
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
 	}
-	
+
 	void testTrivialConstraintRule() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform);
-		rule.setType(CONSTRAINTRULE);
-		rule.addHead(1);
-		rule.setBound(0);
-		prg.addRule(rule);
-		CPPUNIT_ASSERT_EQUAL(1u, prg.stats.rules(BASICRULE).second);
+		Potassco::Atom_t a = 1;
+		prg.addRule(Head_t::Disjunctive, Potassco::toSpan<Atom_t>(&a, 1), 0, Potassco::toSpan<Potassco::WeightLit_t>());
+		prg.endProgram();
+		CPPUNIT_ASSERT_EQUAL(1u, prg.stats.rules[1].sum());
 	}
-	
+
 	void testUnsatConstraintRule() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform);
-		rule.setType(CONSTRAINTRULE);
-		rule.addHead(1);
-		rule.addToBody(2, true);
-		rule.setBound(2);
-		prg.addRule(rule);
-		CPPUNIT_ASSERT_EQUAL(0u, prg.stats.rules());
+		lpAdd(prg, "a :- 2 {b}.");
+		CPPUNIT_ASSERT_EQUAL(0u, prg.stats.rules[0].sum());
 
-		rule.clear();
-		rule.setType(WEIGHTRULE);
-		rule.addHead(1);
-		rule.addToBody(2, true, 2);
-		rule.setBound(3);
-		prg.addRule(rule);
-		CPPUNIT_ASSERT_EQUAL(0u, prg.stats.rules());
+		lpAdd(prg, "a :- 3 {b = 2}.");
+		CPPUNIT_ASSERT_EQUAL(0u, prg.stats.rules[0].sum());
 	}
-	
 	void testDegeneratedConstraintRule() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform);
-		
-		prg.startRule(CHOICERULE).addHead(2).addHead(3).addHead(4).endRule();
-		rule.setType(CONSTRAINTRULE);
-		// a :- 3 { b, c, d }.
-		rule.addHead(1).addToBody(2, true).addToBody(3, true).addToBody(4, true).setBound(3);
-		prg.addRule(rule);
-		CPPUNIT_ASSERT_EQUAL(1u, prg.stats.rules(BASICRULE).second);
+		lpAdd(prg,
+			"{b, c, d}."
+			"a :- 3 { b, c, d }.");
+		CPPUNIT_ASSERT_EQUAL(0u, prg.stats.bodies[0][Body_t::Count]);
 	}
 	void testBoundEqOneExp() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_weight);
-		prg.startRule(CHOICERULE).addHead(2).addHead(3).addHead(4).endRule();
-		rule.setType(CONSTRAINTRULE);
-		// a :- 1 { b, c, d }.
-		rule.addHead(1).addToBody(2, true).addToBody(3, true).addToBody(4, true).setBound(1);
-		prg.addRule(rule);
-		CPPUNIT_ASSERT_EQUAL(3u, prg.stats.rules(BASICRULE).second);
+		lpAdd(prg,
+			"{b, c, d}."
+			"a :- 1 { b, c, d }.");
 		prg.endProgram();
-		std::ostringstream out;
-		prg.write(out);
+		CPPUNIT_ASSERT_EQUAL(4u, prg.stats.rules[1].sum());
 		std::stringstream exp;
 		exp << "1 1 1 0 2 \n"
 		    << "1 1 1 0 3 \n"
 		    << "1 1 1 0 4 \n";
-		CPPUNIT_ASSERT(out.str().find(exp.str()) != std::string::npos);
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
 	}
 	void testBoundEqOneQuad() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_weight);
-		prg.startRule(CHOICERULE).addHead(2).addHead(3).addHead(4).endRule();
-		rule.setType(CONSTRAINTRULE);
+		lpAdd(prg,"{b, c, d}.");
 		// a :- 1 { b, c, d }.
-		rule.addHead(1).addToBody(2, true).addToBody(3, true).addToBody(4, true).setBound(1);
-		RuleTransform tm;
-		CPPUNIT_ASSERT_EQUAL(4u, tm.transform(prg, rule));
+		rule.addHead(1).startSum(1).addGoal(2).addGoal(3).addGoal(4);
+		RuleTransform tm(prg);
+		CPPUNIT_ASSERT_EQUAL(4u, tm.transform(rule.rule(), RuleTransform::strategy_split_aux));
 		prg.endProgram();
-		std::ostringstream out;
-		prg.write(out);
 		std::stringstream exp;
 		exp << "1 1 1 0 2 \n"
 		    << "1 1 1 0 8 \n"
 		    << "1 8 1 0 3 \n"
 		    << "1 8 1 0 4 \n";
-		CPPUNIT_ASSERT(out.str().find(exp.str()) != std::string::npos);
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
 	}
 	void testSixThreeExp() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_weight);
-		prg.startRule(CHOICERULE).addHead(2).addHead(3).addHead(4).addHead(5).addHead(6).addHead(7).endRule();
-		rule.setType(CONSTRAINTRULE);
+		lpAdd(prg, "{b, c, d, e, f, g}.");
 		// a :- 3 {b, c, d, e, f, g}
-		rule.addHead(1).addToBody(2, true).addToBody(3, true).addToBody(4, true).addToBody(5, true).addToBody(6, true).addToBody(7, true);
-		rule.setBound(3);
-		RuleTransform tm;
-		CPPUNIT_ASSERT_EQUAL(20u, tm.transformNoAux(prg, rule));
+		rule.addHead(1).startSum(3).addGoal(2).addGoal(3).addGoal(4).addGoal(5).addGoal(6).addGoal(7);
+		RuleTransform tm(prg);
+		CPPUNIT_ASSERT_EQUAL(20u, tm.transform(rule.rule(), RuleTransform::strategy_select_no_aux));
 		prg.endProgram();
-		std::ostringstream out;
-		prg.write(out);
 		std::stringstream exp;
 		exp // starting with b
 			<< "1 1 3 0 2 3 4 \n"
@@ -431,23 +380,18 @@ public:
 			<< "1 1 3 0 4 6 7 \n"
 			// starting with e
 			<< "1 1 3 0 5 6 7 \n";
-		CPPUNIT_ASSERT(out.str().find(exp.str()) != std::string::npos);
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
 	}
  
 	void testSixThreeQuad() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_weight);
-		prg.startRule(CHOICERULE).addHead(2).addHead(3).addHead(4).addHead(5).addHead(6).addHead(7).endRule();
-		rule.setType(CONSTRAINTRULE);
+		lpAdd(prg, "{b, c, d, e, f, g}.");
 		// a :- 3 {b, c, d, e, f, g}
-		rule.addHead(1).addToBody(2, true).addToBody(3, true).addToBody(4, true).addToBody(5, true).addToBody(6, true).addToBody(7, true);
-		rule.setBound(3);
-		RuleTransform tm;
-		CPPUNIT_ASSERT_EQUAL(18u, tm.transform(prg, rule));
+		rule.addHead(1).startSum(3).addGoal(2).addGoal(3).addGoal(4).addGoal(5).addGoal(6).addGoal(7);
+		RuleTransform tm(prg);
+		CPPUNIT_ASSERT_EQUAL(18u, tm.transform(rule.rule()));
 		CPPUNIT_ASSERT_EQUAL(15u, prg.numAtoms());
 		prg.endProgram();
-		std::ostringstream out;
-		prg.write(out);
-		std::string s = out.str();
 		std::stringstream exp;
 		exp 
 			<< "1 1 2 0 2 8 \n"   // a     :- b, (c,2)
@@ -472,21 +416,17 @@ public:
 
 			<< "1 15 1 0 6 \n"    // (f,1) :- f
 			<< "1 15 1 0 7 \n";   // (f,1) :- g
-		CPPUNIT_ASSERT(out.str().find(exp.str()) != std::string::npos);
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
 	}
 
 	void testWeightSixFourExp() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_weight);
-		prg.startRule(CHOICERULE).addHead(2).addHead(3).addHead(4).addHead(5).addHead(6).addHead(7).endRule();
-		rule.setType(WEIGHTRULE);
+		lpAdd(prg, "{b, c, d, e, f, g}.");
 		// a :- 4 {b=4, c=3, d=2, e=2, f=1, g=1}
-		rule.addHead(1).addToBody(2, true,4).addToBody(3, true,3).addToBody(4, true,2).addToBody(5, true,2).addToBody(6, true,1).addToBody(7, true,1);
-		rule.setBound(4);
-		RuleTransform tm;
-		CPPUNIT_ASSERT_EQUAL(8u, tm.transformNoAux(prg, rule));	
+		rule.addHead(1).startSum(4).addGoal(2, 4).addGoal(3, 3).addGoal(4, 2).addGoal(5, 2).addGoal(6, 1).addGoal(7, 1);
+		RuleTransform tm(prg);
+		CPPUNIT_ASSERT_EQUAL(8u, tm.transform(rule.rule(), RuleTransform::strategy_select_no_aux));
 		prg.endProgram();
-		std::ostringstream out;
-		prg.write(out);
 		std::stringstream exp;
 		exp // starting with b
 			<< "1 1 1 0 2 \n"
@@ -497,22 +437,34 @@ public:
 			<< "1 1 2 0 4 5 \n"
 			<< "1 1 3 0 4 6 7 \n"
 			<< "1 1 3 0 5 6 7 \n";
-		CPPUNIT_ASSERT(out.str().find(exp.str()) != std::string::npos);
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
+	}
+	void testWeightFourExp() {
+		prg.setExtendedRuleMode(LogicProgram::mode_transform_weight);
+		Var a = 1, b = 2, c = 3, d = 4, e = 5;
+		lpAdd(prg, "{b, c, d, e}.");
+		// a :- 4 {b = 2, c = 2, d = 1, e = 1}.
+		rule.addHead(a).startSum(4).addGoal(b, 2).addGoal(c, 2).addGoal(d, 1).addGoal(e, 1);
+		RuleTransform tm(prg);
+		CPPUNIT_ASSERT_EQUAL(3u, tm.transform(rule.rule(), RuleTransform::strategy_select_no_aux));
+		prg.endProgram();
+		std::stringstream exp;
+		exp
+			<< "1 1 2 0 2 3 \n"
+			<< "1 1 3 0 2 4 5 \n"
+			<< "1 1 3 0 3 4 5 \n";
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
 	}
 	
 	void testWeightSixFourQuad() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_weight);
-		prg.startRule(CHOICERULE).addHead(2).addHead(3).addHead(4).addHead(5).addHead(6).addHead(7).endRule();
-		rule.setType(WEIGHTRULE);
+		lpAdd(prg, "{b, c, d, e, f, g}.");
 		// a :- 4 {b=4, c=3, d=2, e=2, f=1, g=1}
-		rule.addHead(1).addToBody(2, true,4).addToBody(3, true,3).addToBody(4, true,2).addToBody(5, true,2).addToBody(6, true,1).addToBody(7, true,1);
-		rule.setBound(4);
-		RuleTransform tm;
-		CPPUNIT_ASSERT_EQUAL(14u, tm.transform(prg, rule));
+		rule.addHead(1).startSum(4).addGoal(2, 4).addGoal(3, 3).addGoal(4, 2).addGoal(5, 2).addGoal(6, 1).addGoal(7, 1);
+		RuleTransform tm(prg);
+		CPPUNIT_ASSERT_EQUAL(14u, tm.transform(rule.rule()));
 		CPPUNIT_ASSERT(13u == prg.numAtoms());
 		prg.endProgram();
-		std::ostringstream out;
-		prg.write(out);
 		std::stringstream exp;
 		exp // head
 			<< "1 1 1 0 2 \n"     // a     :- b.
@@ -534,108 +486,120 @@ public:
 			<< "1 13 1 0 6 \n"    // (f,1) :- f.
 			<< "1 13 1 0 7 \n";   // (f,1) :- g.
 			
-		CPPUNIT_ASSERT(out.str().find(exp.str()) != std::string::npos);
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
 		
 	}
 
 	void testWeightBug() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_weight);
-		prg.startRule(CHOICERULE).addHead(2).addHead(3).addHead(4).endRule();
-		rule.setType(WEIGHTRULE);
+		lpAdd(prg, "{b, c, d}.");
 		// a :- 5 {b=3, c=3, d=1}
-		rule.addHead(1).addToBody(2, true,3).addToBody(3, true,3).addToBody(4, true,1);
-		rule.setBound(5);
-		RuleTransform tm;
-		CPPUNIT_ASSERT_EQUAL(2u, tm.transform(prg, rule));
+		rule.addHead(1).startSum(5).addGoal(2, 3).addGoal(3, 3).addGoal(4, 1);
+		RuleTransform tm(prg);
+		CPPUNIT_ASSERT_EQUAL(2u, tm.transform(rule.rule()));
 		CPPUNIT_ASSERT(8u == prg.numAtoms());
 		prg.endProgram();
-		std::ostringstream out;
-		prg.write(out);
 		std::stringstream exp;
 		exp 
 			<< "1 1 2 0 2 8 \n"// a    :- b, (c, 2)
 			<< "1 8 1 0 3 \n"; // (c,2):- c.
-		CPPUNIT_ASSERT(out.str().find(exp.str()) != std::string::npos);
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
 	}
 
 	void testDegeneratedWeightRule() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_weight);
-		prg.startRule(CHOICERULE).addHead(2).addHead(3).addHead(4).endRule();
-		rule.setType(WEIGHTRULE);
+		lpAdd(prg, "{b, c, d}.");
 		// a :- 20 {b=18, c=18, d=18}
-		rule.addHead(1).addToBody(2, true,18).addToBody(3, true,18).addToBody(4, true,18);
-		rule.setBound(20);
-		VarVec   head;
-		BodyInfo body;
-		RuleType t = prg.simplifyRule(rule, head, body);
-		rule.clear();
-		rule.setType(t);
-		rule.setBound(body.bound());
-		rule.body  = body.lits;
-		rule.heads = head;
-		CPPUNIT_ASSERT(rule.type() == CONSTRAINTRULE);
-		RuleTransform tm;
-		CPPUNIT_ASSERT_EQUAL(3u, tm.transformNoAux(prg, rule));
+		rule.addHead(1).startSum(20).addGoal(2, 18).addGoal(3, 18).addGoal(4, 18);
+		Potassco::RuleBuilder mem;
+		LogicProgram::SRule meta;
+		prg.simplifyRule(rule.rule(), mem, meta);
+		RuleTransform tm(prg);
+		CPPUNIT_ASSERT_EQUAL(3u, tm.transform(mem.rule(), RuleTransform::strategy_select_no_aux));
 		prg.endProgram();
-		std::ostringstream out;
-		prg.write(out);
 		std::stringstream exp;
 		exp 
 			<< "1 1 2 0 2 3 \n"  // a :- b, c
 			<< "1 1 2 0 2 4 \n"  // a :- b, d
 			<< "1 1 2 0 3 4 \n"; // a :- c, d
-		CPPUNIT_ASSERT(out.str().find(exp.str()) != std::string::npos);
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
 	}
 
 	void testStupidWeightBug() {
-		prg.setAtomName(8, "h").setAtomName(9, "x");
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_weight);
-		prg.startRule(CHOICERULE).addHead(1).addHead(2).addHead(3).addHead(4).addHead(5).addHead(6).addHead(7).addHead(8).endRule();
-		rule.setType(WEIGHTRULE);
+		Var v8 = prg.newAtom();
+		Var v9 = prg.newAtom();
+		lpAdd(prg, "{a,b,c,d,e,f,g,h}.");
 		// x :- 24 {a=31, b=29, c=29, d=28, e=21, f=15, g=8, h=5}
-		rule.addHead(9).addToBody(1, true,31).addToBody(2, true,29).addToBody(3, true,29).addToBody(4, true,28).addToBody(5, true,21).addToBody(6, true,15)
-		               .addToBody(7,true,8).addToBody(8,true,5);
+		rule.addHead(v9).startSum(24).addGoal(1, 31).addGoal(2, 29).addGoal(3, 29).addGoal(4, 28).addGoal(5, 21).addGoal(6, 15)
+			.addGoal(7, 8).addGoal(v8, 5);
 
-		rule.setBound(24);
-		RuleTransform tm;
+		RuleTransform tm(prg);
 		uint32 prev = prg.numAtoms();
-		CPPUNIT_ASSERT_EQUAL(14u, tm.transform(prg, rule));
+		CPPUNIT_ASSERT_EQUAL(14u, tm.transform(rule.rule()));
 		CPPUNIT_ASSERT(prg.numAtoms() == prev+6);
 		prg.endProgram();
-		std::ostringstream out;
-		prg.write(out);
 		std::stringstream exp;
 		exp  << "1 13 3 0 6 7 8 \n";
-		CPPUNIT_ASSERT(out.str().find(exp.str()) != std::string::npos);
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
 	}
 
 	void testWeightBogusNormal() {
 		prg.setExtendedRuleMode(LogicProgram::mode_transform_weight);
-		prg.startRule(CHOICERULE).addHead(1).addHead(2).addHead(3).endRule();
-		rule.setType(WEIGHTRULE);
+		lpAdd(prg, "{a,b,c}.");
 		// a :- 24 {b=12,c=12}.
-		rule.addHead(1).addToBody(2, true,12).addToBody(3, true,12);
-
-		rule.setBound(24);
-		RuleTransform tm;
+		rule.addHead(1).startSum(24).addGoal(2, 12).addGoal(3, 12);
+		RuleTransform tm(prg);
 		uint32 prev = prg.numAtoms();
-		CPPUNIT_ASSERT_EQUAL(1u, tm.transform(prg, rule));
+		CPPUNIT_ASSERT_EQUAL(1u, tm.transform(rule.rule()));
 		CPPUNIT_ASSERT(prg.numAtoms() == prev);
 	}
 
 	void testShiftDisjunction() {
-		prg.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "x").setAtomName(4, "y");
-		rule.setType(DISJUNCTIVERULE).addHead(1).addHead(2).addToBody(3, true).addToBody(4, true);
-		RuleTransform tm;
-		uint32 nr = tm.transform(prg, rule);
+		rule.start().addHead(1).addHead(2).addGoal(3).addGoal(4);
+		RuleTransform tm(prg);
+		uint32 nr = tm.transform(rule.rule());
 		CPPUNIT_ASSERT(3 == nr);
 	}
+	void testMixedRule() {
+		prg.setExtendedRuleMode(LogicProgram::mode_transform);
+		lpAdd(prg,
+			"{a} :- 3 {b=2, c=1, d=2, e=1}."
+			"{b,c,d,e}.");
+		CPPUNIT_ASSERT(prg.endProgram());
+		std::stringstream exp;
+		exp
+			<< "1 8 2 0 2 3 \n"  // aux :- b, c
+			<< "1 8 2 0 2 4 \n"  // aux :- b, d
+			<< "1 8 2 0 2 5 \n"  // aux :- b, e
+			<< "1 1 2 1 9 8\n";  // a   :- not a', aux
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
+	}
+	void testDisjMixedRule() {
+		LogicProgram prg;
+		SharedContext ctx;
+		prg.start(ctx);
+		prg.setExtendedRuleMode(LogicProgram::mode_transform);
+		lpAdd(prg,
+			"a|b :- 3{c=2, d=1, e=2, f=1}."
+			"a :- b."
+			"b :- a."
+			"{c,d,e,f}.");
+		CPPUNIT_ASSERT(prg.endProgram());
+		std::stringstream exp;
+		exp
+			<< "1 7 2 0 3 4 \n"   // aux :- c, d
+			<< "1 7 2 0 3 5 \n"   // aux :- c, e
+			<< "1 7 2 0 3 6 \n"   // aux :- c, f
+			<< "8 2 1 2 1 0 7\n"; // a|b :- aux
+		CPPUNIT_ASSERT(findSmodels(exp, prg));
+	}
 private:
+	typedef Potassco::RuleBuilder RuleBuilder;
 	SharedContext ctx;
 	LogicProgram  prg;
-	Rule          rule;
+	RuleBuilder   rule;
 };
-
 CPPUNIT_TEST_SUITE_REGISTRATION(RuleTest);
 CPPUNIT_TEST_SUITE_REGISTRATION(RuleTransformTest);
 

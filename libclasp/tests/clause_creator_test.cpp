@@ -72,12 +72,12 @@ class ClauseCreatorTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST_SUITE_END();	
 public:
 	ClauseCreatorTest() {
-		a = posLit(ctx.addVar(Var_t::atom_var));
-		b = posLit(ctx.addVar(Var_t::atom_var));
-		c = posLit(ctx.addVar(Var_t::atom_var));
-		d = posLit(ctx.addVar(Var_t::atom_var));
-		e = posLit(ctx.addVar(Var_t::atom_var));
-		f = posLit(ctx.addVar(Var_t::atom_var));
+		a = posLit(ctx.addVar(Var_t::Atom));
+		b = posLit(ctx.addVar(Var_t::Atom));
+		c = posLit(ctx.addVar(Var_t::Atom));
+		d = posLit(ctx.addVar(Var_t::Atom));
+		e = posLit(ctx.addVar(Var_t::Atom));
+		f = posLit(ctx.addVar(Var_t::Atom));
 		creator.setSolver(*ctx.master());
 		ctx.startAddConstraints(1);
 	}
@@ -121,7 +121,7 @@ public:
 		solver().assume(~c);
 		solver().assume(~d);
 		solver().propagate();
-		CPPUNIT_ASSERT_EQUAL(true, (bool)creator.start(Constraint_t::learnt_conflict).add(a)
+		CPPUNIT_ASSERT_EQUAL(true, (bool)creator.start(Constraint_t::Conflict).add(a)
 			.add(b).add(c).add(d).end());
 
 		CPPUNIT_ASSERT_EQUAL(true, solver().isTrue(a));
@@ -135,7 +135,7 @@ public:
 		solver().assume(~c);
 		solver().assume(~d);
 		
-		creator.start(Constraint_t::learnt_conflict).add(a).add(b).add(d).add(c);
+		creator.start(Constraint_t::Conflict).add(a).add(b).add(d).add(c);
 		CPPUNIT_ASSERT_EQUAL(true, (bool)creator.end());	// asserts a
 		solver().undoUntil(2);	// clear a and d
 		solver().assume(~d);		// hopefully d was watched.
@@ -150,32 +150,32 @@ public:
 			}
 			std::vector<LitVec::size_type> clSizes_;
 			std::vector<ConstraintType> clTypes_;
-		}*heu = new FakeHeu;
-		solver().setHeuristic(heu);
+		}heu;
+		solver().setHeuristic(&heu, Ownership_t::Retain);
 		CPPUNIT_ASSERT_EQUAL(true, (bool)creator.start().add(a).add(b).add(c).add(d).end());
 		ctx.endInit();
 		solver().assume(a);
 		solver().assume(b);
 		solver().propagate();
 
-		CPPUNIT_ASSERT_EQUAL(true, (bool)creator.start(Constraint_t::learnt_conflict).add(c)
+		CPPUNIT_ASSERT_EQUAL(true, (bool)creator.start(Constraint_t::Conflict).add(c)
 			.add(~a).add(~b).end());
 
-		CPPUNIT_ASSERT_EQUAL(true, (bool)creator.start(Constraint_t::learnt_loop).add(c)
+		CPPUNIT_ASSERT_EQUAL(true, (bool)creator.start(Constraint_t::Loop).add(c)
 			.add(~a).add(~b).end(0));
 
-		CPPUNIT_ASSERT_EQUAL(uint32(3), (uint32)heu->clSizes_.size());
-		CPPUNIT_ASSERT_EQUAL(uint32(4), (uint32)heu->clSizes_[0]);
-		CPPUNIT_ASSERT_EQUAL(uint32(3), (uint32)heu->clSizes_[1]);
-		CPPUNIT_ASSERT_EQUAL(uint32(3), (uint32)heu->clSizes_[2]);
+		CPPUNIT_ASSERT_EQUAL(uint32(3), (uint32)heu.clSizes_.size());
+		CPPUNIT_ASSERT_EQUAL(uint32(4), (uint32)heu.clSizes_[0]);
+		CPPUNIT_ASSERT_EQUAL(uint32(3), (uint32)heu.clSizes_[1]);
+		CPPUNIT_ASSERT_EQUAL(uint32(3), (uint32)heu.clSizes_[2]);
 
-		CPPUNIT_ASSERT_EQUAL(Constraint_t::static_constraint, heu->clTypes_[0]);
-		CPPUNIT_ASSERT_EQUAL(Constraint_t::learnt_conflict, heu->clTypes_[1]);
-		CPPUNIT_ASSERT_EQUAL(Constraint_t::learnt_loop, heu->clTypes_[2]);
+		CPPUNIT_ASSERT_EQUAL(Constraint_t::Static, heu.clTypes_[0]);
+		CPPUNIT_ASSERT_EQUAL(Constraint_t::Conflict, heu.clTypes_[1]);
+		CPPUNIT_ASSERT_EQUAL(Constraint_t::Loop, heu.clTypes_[2]);
 	}
 
 	void testCreatorAddLitBug() {
-		creator.start(Constraint_t::learnt_conflict).add(a);
+		creator.start(Constraint_t::Conflict).add(a);
 		solver().assume(b) && solver().propagate();
 		creator.add(~b);
 		solver().assume(c) && solver().propagate();
@@ -202,7 +202,7 @@ public:
 		ctx.endInit();
 		solver().assume(a); solver().propagate();
 		solver().assume(b); solver().propagate();
-		creator.start(Constraint_t::learnt_loop);
+		creator.start(Constraint_t::Loop);
 		creator.add(~a).add(~b).add(~b).add(~a).add(c).add(d).prepare(true);
 		CPPUNIT_ASSERT(creator.size() == 4);
 		CPPUNIT_ASSERT_EQUAL(c, creator[0]);
@@ -211,7 +211,7 @@ public:
 
 	void testCreatorSimplifyBug() {
 		LitVec clause;
-		clause.push_back(negLit(0));
+		clause.push_back(lit_false());
 		clause.push_back(a);
 		clause.push_back(b);
 		ClauseCreator::prepare(*ctx.master(), clause, ClauseCreator::clause_force_simplify);
@@ -222,7 +222,7 @@ public:
 		ctx.endInit();
 		solver().assume(a); solver().propagate();
 		solver().assume(b); solver().propagate();
-		creator.start(Constraint_t::learnt_loop);
+		creator.start(Constraint_t::Loop);
 		creator.add(~a).add(~b).add(c).add(d);
 		CPPUNIT_ASSERT(creator.end());
 		CPPUNIT_ASSERT_EQUAL(c, creator[0]);
@@ -232,7 +232,7 @@ public:
 		solver().undoUntil(0);
 		// test with a short clause
 		solver().assume(a); solver().propagate();
-		creator.start(Constraint_t::learnt_loop);
+		creator.start(Constraint_t::Loop);
 		creator.add(~a).add(b).add(c);
 		CPPUNIT_ASSERT(creator.end());
 		CPPUNIT_ASSERT_EQUAL(b, creator[0]);
@@ -246,7 +246,7 @@ public:
 		solver().assume(d); solver().propagate();                     // level 3
 		solver().assume(f); solver().propagate();                     // level 4
 
-		creator.start(Constraint_t::learnt_loop);
+		creator.start(Constraint_t::Loop);
 		creator.add(~c).add(~a).add(~d).add(~b); // 2 1 3 1
 		CPPUNIT_ASSERT_EQUAL(false, (bool)creator.end());
 		// make sure we watch highest levels, i.e. 3 and 2
@@ -259,7 +259,7 @@ public:
 		// test with a short clause
 		solver().assume(a); solver().propagate();// level 1
 		solver().assume(c); solver().propagate();// level 2
-		creator.start(Constraint_t::learnt_loop);
+		creator.start(Constraint_t::Loop);
 		creator.add(~a).add(~c);
 		CPPUNIT_ASSERT_EQUAL(false, (bool)creator.end());
 		CPPUNIT_ASSERT_EQUAL(~c, creator[0]);
@@ -271,7 +271,7 @@ public:
 		ctx.endInit();
 		solver().assume(a); solver().force(b,0); solver().propagate();// level 1
 		solver().assume(c); solver().propagate();                     // level 2
-		creator.start(Constraint_t::learnt_loop);
+		creator.start(Constraint_t::Loop);
 		creator.add(~c).add(~a).add(d).add(~b);                       // 2 1 Free 1
 		CPPUNIT_ASSERT_EQUAL(true, (bool)creator.end());
 		// make sure we watch the right lits, i.e. d (free) and ~c (highest DL)
@@ -284,7 +284,7 @@ public:
 		solver().reduceLearnts(1.0f);
 		solver().assume(a); solver().force(b,0); solver().propagate();// level 1
 		solver().assume(c); solver().propagate();                     // level 2
-		creator.start(Constraint_t::learnt_loop);
+		creator.start(Constraint_t::Loop);
 		creator.add(~c).add(~a).add(d);                               // 2 1 Free
 		CPPUNIT_ASSERT_EQUAL(true, (bool)creator.end());
 		// make sure we watch the right lits, i.e. d (free) and ~c (highest DL)
@@ -300,7 +300,7 @@ public:
 		solver().assume(~c) && solver().propagate();
 		CPPUNIT_ASSERT(solver().decisionLevel() == 3);
 		
-		creator.start(Constraint_t::learnt_other).add(d).add(b).add(c).add(a);
+		creator.start(Constraint_t::Other).add(d).add(b).add(c).add(a);
 		CPPUNIT_ASSERT(ClauseCreator::status(solver(), &creator.lits()[0], &creator.lits()[0] + creator.size()) == ClauseCreator::status_sat);
 
 		ClauseCreator::Result r = creator.end();
@@ -324,7 +324,7 @@ public:
 		CPPUNIT_ASSERT(temp[0] == d);
 		CPPUNIT_ASSERT(temp[1] == a);
 		
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, ClauseCreator::clause_no_add);
 		temp.clear();
 		r.local->clause()->toLits(temp);
@@ -337,7 +337,7 @@ public:
 		LitVec cl;
 		solver().assume(~a) && solver().propagate();
 		solver().pushRootLevel(solver().decisionLevel());
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, 0);
 		CPPUNIT_ASSERT_EQUAL(false, r.ok());
 		CPPUNIT_ASSERT_EQUAL(true, solver().hasConflict());
@@ -355,7 +355,7 @@ public:
 		// ~a ~b ~c f -> Unit: f@3
 		cl.push_back(~a); cl.push_back(f);
 		cl.push_back(~c); cl.push_back(~b);
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::integrate(solver(), p, 0);
 		CPPUNIT_ASSERT(solver().isTrue(f));
 		CPPUNIT_ASSERT(solver().decisionLevel() == solver().rootLevel());
@@ -373,7 +373,7 @@ public:
 		solver().assume(a) && solver().propagate();
 		LitVec cl; 
 		cl.push_back(a);
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::integrate(solver(), p, 0);
 		CPPUNIT_ASSERT(solver().isTrue(a));
 		CPPUNIT_ASSERT(solver().decisionLevel() == 0);
@@ -388,7 +388,7 @@ public:
 		// ~a ~b ~c ~d -> conflicting@3
 		LitVec cl;
 		cl.push_back(~a); cl.push_back(~c); cl.push_back(~b); cl.push_back(~d);
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, 0);
 		CPPUNIT_ASSERT(!r.ok());
 		CPPUNIT_ASSERT(r.local != 0);
@@ -404,7 +404,7 @@ public:
 		// ~a ~b ~c -> Conflict @3
 		LitVec cl;
 		cl.push_back(~a); cl.push_back(~c); cl.push_back(~b);
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::integrate(solver(), p, 0);
 		CPPUNIT_ASSERT(solver().decisionLevel() == uint32(2));
 	}
@@ -418,7 +418,7 @@ public:
 		// ~a ~b ~c -> Conflict @3, Asserting @2
 		LitVec cl;
 		cl.push_back(~a); cl.push_back(~c); cl.push_back(~b);
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::integrate(solver(), p, 0);
 		CPPUNIT_ASSERT(solver().decisionLevel() == uint32(3));
 		solver().popRootLevel();
@@ -433,7 +433,7 @@ public:
 		solver().assume(~c) && solver().propagate();
 		solver().assume(~d) && solver().propagate();
 		solver().pushRootLevel(solver().decisionLevel());
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, ClauseCreator::clause_explicit);
 		CPPUNIT_ASSERT_EQUAL(false, r.ok());
 		CPPUNIT_ASSERT_EQUAL(uint32(1), solver().numLearntConstraints());
@@ -445,7 +445,7 @@ public:
 		solver().assume(~a) && solver().propagate();
 		solver().assume(b) && solver().propagate();
 		solver().assume(~d) && solver().propagate();
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, 0);
 		CPPUNIT_ASSERT_EQUAL(true, r.ok());
 		CPPUNIT_ASSERT(3u == solver().numAssignedVars());
@@ -457,7 +457,7 @@ public:
 		solver().assume(b) && solver().propagate();
 		solver().assume(~d) && solver().propagate();
 		solver().force(c,0) && solver().propagate();
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, 0);
 		CPPUNIT_ASSERT_EQUAL(true, r.ok());
 	}
@@ -470,7 +470,7 @@ public:
 		solver().force(~d,0) && solver().propagate();
 		solver().assume(c) && solver().propagate();
 		CPPUNIT_ASSERT(solver().decisionLevel() == 3);
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, ClauseCreator::clause_not_sat);
 		
 		CPPUNIT_ASSERT_EQUAL(true, r.ok());
@@ -483,7 +483,7 @@ public:
 		cl.push_back(a); cl.push_back(b);
 		solver().force(~a, 0);
 		solver().assume(b);
-		SharedLiterals* p(SharedLiterals::newShareable(cl,Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl,Constraint_t::Other));
 		CPPUNIT_ASSERT((ClauseCreator::status(solver(), p->begin(), p->end()) & ClauseCreator::status_unit) != 0);
 		ClauseCreator::integrate(solver(), p, ClauseCreator::clause_explicit);
 	}
@@ -491,7 +491,7 @@ public:
 	void testIntegrateKnownOrderBug() {
 		LitVec cl;
 		cl.push_back(a);
-		SharedLiterals* p(SharedLiterals::newShareable(cl,Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl,Constraint_t::Other));
 		CPPUNIT_ASSERT((ClauseCreator::status(solver(), p->begin(), p->end()) & ClauseCreator::status_unit) != 0);
 		ClauseCreator::integrate(solver(), p, ClauseCreator::clause_no_prepare);
 		CPPUNIT_ASSERT(solver().isTrue(a));
@@ -500,7 +500,7 @@ public:
 	void testIntegrateNotConflictingBug() {
 		LitVec cl;
 		cl.push_back(a); cl.push_back(b);
-		SharedLiterals* p(SharedLiterals::newShareable(cl,Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl,Constraint_t::Other));
 		solver().assume(~a) && solver().propagate();
 		solver().force(~b,0)&& solver().propagate();
 		CPPUNIT_ASSERT((ClauseCreator::status(solver(), p->begin(), p->end()) & ClauseCreator::status_unsat) != 0);
@@ -512,7 +512,7 @@ public:
 		LitVec cl;
 		cl.push_back(a); cl.push_back(b); cl.push_back(c);
 		cl.push_back(d); cl.push_back(e); cl.push_back(f);
-		SharedLiterals* p(SharedLiterals::newShareable(cl,Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl,Constraint_t::Other));
 		solver().force(~d, 0) && solver().propagate();
 		solver().assume(~a)   && solver().propagate();
 		ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, ClauseCreator::clause_no_add);
@@ -529,7 +529,7 @@ public:
 		solver().assume(b) && solver().propagate();
 		solver().assume(~d) && solver().propagate();
 		do {
-			SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+			SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 			ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, ClauseCreator::clause_not_sat);
 			CPPUNIT_ASSERT_EQUAL(true, r.ok());
 			CPPUNIT_ASSERT(solver().numAssignedVars() == 3);
@@ -542,7 +542,7 @@ public:
 		solver().assume(b);
 		LitVec cl;
 		cl.push_back(a);
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, 0);
 		CPPUNIT_ASSERT_EQUAL(false, r.ok());
 		CPPUNIT_ASSERT(0 == r.local);
@@ -558,7 +558,7 @@ public:
 		// ~a ~b ~c -> Conflict @3, Asserting @2
 		LitVec cl;
 		cl.push_back(~a); cl.push_back(~c); cl.push_back(~b);
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, 0);
 		CPPUNIT_ASSERT_EQUAL(false, r.ok());
 		solver().backtrack();
@@ -577,7 +577,7 @@ public:
 		// ~a ~b ~c -> Conflict @2
 		LitVec cl;
 		cl.push_back(~a); cl.push_back(~c); cl.push_back(~b);
-		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::learnt_other));
+		SharedLiterals* p(SharedLiterals::newShareable(cl, Constraint_t::Other));
 		ClauseCreator::Result r = ClauseCreator::integrate(solver(), p, 0);
 		CPPUNIT_ASSERT_EQUAL(false, r.ok());
 		CPPUNIT_ASSERT_EQUAL(true, solver().resolveConflict());
@@ -590,7 +590,7 @@ public:
 		ctx.addUnary(a);
 		ctx.endInit();
 		solver().assume(~b) && solver().propagate();
-		creator.start(Constraint_t::learnt_conflict);
+		creator.start(Constraint_t::Conflict);
 		creator.add(b).add(c).add(~a).end();
 
 		CPPUNIT_ASSERT(1u == ctx.numLearntShort());

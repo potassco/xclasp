@@ -41,7 +41,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				Optimization="0"
-				AdditionalIncludeDirectories="..\..\..\..\libclasp"
+				AdditionalIncludeDirectories="..\..\..\..\libclasp;..\..\..\..\liblp"
 				PreprocessorDefinitions="WIN32;_DEBUG;_CONSOLE;WITH_THREADS=1"
 				MinimalRebuild="true"
 				BasicRuntimeChecks="3"
@@ -115,7 +115,7 @@
 				Name="VCCLCompilerTool"
 				Optimization="2"
 				EnableIntrinsicFunctions="true"
-				AdditionalIncludeDirectories="..\..\..\..\libclasp"
+				AdditionalIncludeDirectories="..\..\..\..\libclasp;..\..\..\..\liblp"
 				PreprocessorDefinitions="WIN32;NDEBUG;_CONSOLE;WITH_THREADS=1"
 				RuntimeLibrary="2"
 				EnableFunctionLevelLinking="true"

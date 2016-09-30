@@ -18,17 +18,38 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
 #include "test.h"
-#include <sstream>
+#include "lpcompare.h"
 #include <clasp/parser.h>
-#include <clasp/logic_program.h>
 #include <clasp/minimize_constraint.h>
 #include <clasp/solver.h>
+#include <potassco/theory_data.h>
+#include <potassco/aspif.h>
+#include <potassco/smodels.h>
 namespace Clasp { namespace Test {
 
-class LparseParserTest : public CppUnit::TestFixture {
+template <class Api>
+static bool parse(Api& api, std::istream& str, const ParserOptions& opts = ParserOptions()) {
+	ProgramParser& p = api.parser();
+	return p.accept(str, opts) && p.parse();
+}
+VarVec& clear(VarVec& vec) { vec.clear(); return vec; }
+static VarVec& operator, (VarVec& vec, int val) {
+	vec.push_back(val);
+	return vec;
+}
+static struct Empty {
+	template <class T>
+	operator Potassco::Span<T> () const { return Potassco::toSpan<T>(); }
+} empty;
 
-  CPPUNIT_TEST_SUITE(LparseParserTest);
-	CPPUNIT_TEST(testEmptyLparse);
+#define NOT_EMPTY(X,...)
+#define SPAN(VEC,...)      NOT_EMPTY(__VA_ARGS__) Potassco::toSpan((clear(VEC) , __VA_ARGS__))
+
+using Potassco::SmodelsOutput;
+using Potassco::AspifOutput;
+class SmodelsParserTest : public CppUnit::TestFixture {
+	CPPUNIT_TEST_SUITE(SmodelsParserTest);
+	CPPUNIT_TEST(testEmptySmodels);
 	CPPUNIT_TEST(testSingleFact);
 	CPPUNIT_TEST(testComputeStatementAssumptions);
 	CPPUNIT_TEST(testTransformSimpleConstraintRule);
@@ -37,198 +58,707 @@ class LparseParserTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testSimpleConstraintRule);
 	CPPUNIT_TEST(testSimpleWeightRule);
 	CPPUNIT_TEST(testSimpleChoiceRule);
+	CPPUNIT_TEST(testMinimizePriority);
+	CPPUNIT_TEST(testEdgeDirectives);
+	CPPUNIT_TEST(testHeuristicDirectives);
+	CPPUNIT_TEST(testSimpleIncremental);
+	CPPUNIT_TEST(testIncrementalMinimize);
 	CPPUNIT_TEST_SUITE_END();
 
+	std::stringstream prg;
+	SharedContext     ctx;
+	Asp::LogicProgram api;
 public:
 	void setUp() {
 		api.start(ctx, Asp::LogicProgram::AspOptions().noScc());
 	}
-	void testEmptyLparse() {
-		std::stringstream empty("0\n0\nB+\n0\nB-\n0\n1\n");
-		CPPUNIT_ASSERT_EQUAL(true, Input_t::parseLparse(empty, api));
-		empty.clear();
-		std::stringstream out;
-		api.endProgram();
-		api.write(out);
-		CPPUNIT_ASSERT_EQUAL(empty.str(), out.str());
+	void toSmodels(const char* txt, Var falseAt = 0) {
+		prg.clear();
+		prg.str("");
+		SmodelsOutput sm(prg, true, falseAt);
+		Potassco::AspifTextInput x(&sm);
+		std::stringstream temp; temp << txt;
+		CPPUNIT_ASSERT(Potassco::readProgram(temp, x, 0) == 0);
 	}
-	
+	bool parseProgram() {
+		return parse(api, prg);
+	}
+	void testEmptySmodels() {
+		toSmodels("");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		api.endProgram();
+		std::stringstream empty;
+		CPPUNIT_ASSERT(compareSmodels(empty, api));
+	}
 	void testSingleFact() {
-		std::stringstream prg("1 1 0 0 \n0\n1 a\n0\nB+\n0\nB-\n0\n1\n");
-		CPPUNIT_ASSERT_EQUAL(true, Input_t::parseLparse(prg, api));
+		toSmodels("x1.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
 		api.endProgram();
 		CPPUNIT_ASSERT_EQUAL(0u, ctx.numVars());
-		CPPUNIT_ASSERT_EQUAL('a', ctx.symbolTable()[1].name[0]);
 	}
 	void testComputeStatementAssumptions() {
-		std::stringstream prg;
-		prg << "1 1 1 1 2 \n" // d:-not c.
-		    << "1 2 1 1 3 \n" // c:-not a.
-		    << "1 3 1 1 4 \n" // a:-not b.
-		    << "1 4 1 1 3 \n" // b:-not a.
-		    << "0\n1 d\n2 c\n3 a\n4 b\n"
-		    << "0\nB+\n0\nB-\n2\n0\n1\n"; // B-: c
-		
-		CPPUNIT_ASSERT_EQUAL(true, Input_t::parseLparse(prg, api));
+		toSmodels(
+			"x1 :- not x2.\n"
+			"x2 :- not x3.\n"
+			"x3 :- not x4.\n"
+			"x4 :- not x3.\n"
+			":- x2.\n", 2);
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
 		api.endProgram() && ctx.endInit();
-		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->isTrue(ctx.symbolTable()[3].lit));
-		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->isTrue(ctx.symbolTable()[1].lit));
-		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->isFalse(ctx.symbolTable()[2].lit));
-		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->isFalse(ctx.symbolTable()[4].lit));
+		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->isTrue(api.getLiteral(3)));
+		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->isTrue(api.getLiteral(1)));
+		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->isFalse(api.getLiteral(2)));
+		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->isFalse(api.getLiteral(4)));
 	}
-
-	
 	void testTransformSimpleConstraintRule() {
-		std::stringstream prg;
-		prg << "2 1 3 1 2 3 2 4 \n"// a :- 2 {not c, b, d}
-		    << "1 2 1 1 3 \n"      // b :- not c.
-		    << "1 3 1 1 2 \n"      // c :- not b.
-		    << "1 4 1 1 3 \n"      // d :- not c.
-		    << "0\n1 a\n2 b\n3 c\n4 d\n"
-		    << "0\nB+\n0\nB-\n0\n1\n";
-
-		std::stringstream exp, out;
+		toSmodels(
+			"x1 :- 2{not x3, x2, x4}.\n"
+			"x2 :- not x3.\n"
+			"x3 :- not x2.\n"
+			"x4 :- not x3.\n");
 		api.setExtendedRuleMode(Asp::LogicProgram::mode_transform_weight);
-		CPPUNIT_ASSERT_EQUAL(true, Input_t::parseLparse(prg, api));
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
 		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
-		CPPUNIT_ASSERT(ctx.symbolTable()[2].lit == ctx.symbolTable()[1].lit);
-		CPPUNIT_ASSERT(ctx.symbolTable()[4].lit == ctx.symbolTable()[1].lit);
-		exp << "1 1 1 1 3 \n" // a :- not c.
-		    << "1 3 1 1 1 \n" // c :- not b.
-		    << "1 2 1 0 1 \n" // b :- a.
-		    << "1 4 1 0 1 \n" // d :- a.
-		    << "0\n1 a\n2 b\n3 c\n4 d\n0\n"
-		    << "B+\n0\nB-\n0\n1\n"
-		;
-		api.write(out);
-		CPPUNIT_ASSERT_EQUAL(exp.str(), out.str());
+		CPPUNIT_ASSERT(api.getLiteral(2) == api.getLiteral(1));
+		CPPUNIT_ASSERT(api.getLiteral(4) == api.getLiteral(1));
+		toSmodels(
+			"x1 :- not x3.\n"
+			"x3 :-not x1.\n"
+			"x2 :- x1.\n"
+			"x4 :- x1.\n");
+		CPPUNIT_ASSERT(compareSmodels(prg, api));
 	}
-
 	void testTransformSimpleWeightRule() {
-		std::stringstream prg;
-		prg << "5 1 2 3 1 3 2 4 2 1 3\n"// a :- 2 [b=1, not c=2, d=3]
-		    << "1 2 1 1 3 \n" // b :- not c.
-		    << "1 3 1 1 2 \n" // c :- not b.
-		    << "1 4 1 1 3 \n" // d :- not c.
-		    << "0\n1 a\n2 b\n3 c\n4 d\n"
-		    << "0\nB+\n0\nB-\n0\n1\n";
+		toSmodels(
+			"x1 :- 2 {x2=1, not x3=2, x4=3}.\n"
+			"x2 :- not x3.\n"
+			"x3 :- not x2.\n"
+			"x4 :-not x3.");
 		api.setExtendedRuleMode(Asp::LogicProgram::mode_transform_weight);
-		CPPUNIT_ASSERT_EQUAL(true, Input_t::parseLparse(prg, api));
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
 		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
 		CPPUNIT_ASSERT_EQUAL(1u, ctx.numVars());
-		
-		std::stringstream exp, out;
-		exp << "1 1 1 1 3 \n" // a :- not c.
-		    << "1 3 1 1 1 \n" // c :- not a.
-		    << "1 2 1 0 1 \n" // b :- a.
-		    << "1 4 1 0 1 \n" // d :- a.
-		    << "0\n1 a\n2 b\n3 c\n4 d\n0\n"
-		    << "B+\n0\nB-\n0\n1\n"
-		;
-		api.write(out);
-		CPPUNIT_ASSERT_EQUAL(exp.str(), out.str());		
+		toSmodels(
+			"x1 :- not x3.\n"
+			"x3 :- not x1.\n"
+			"x2 :- x1.\n"
+			"x4 :- x1.\n");
+		CPPUNIT_ASSERT(compareSmodels(prg, api));
 	}
-
 	void testTransformSimpleChoiceRule() {
-		std::stringstream prg;
-		prg << "3 3 1 2 3 2 1 3 2 \n"// {a,b,c} :- b, not c.
-		    << "1 2 1 1 1 \n" // b :- not a.
-		    << "1 3 1 1 2 \n" // c :- not b.
-		    << "0\n1 a\n2 b\n3 c\n"
-		    << "0\nB+\n0\nB-\n0\n1\n";
+		toSmodels("{x1;x2;x3} :- x2, not x3.\n"
+			"x2 :- not x1.\n"
+			"x3 :- not x2.");
 		api.setExtendedRuleMode(Asp::LogicProgram::mode_transform_choice);
-		CPPUNIT_ASSERT_EQUAL(true, Input_t::parseLparse(prg, api));
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
 		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
-		std::stringstream exp, out;
-		exp << "1 2 0 0 \n"   // b.
-		    << "1 4 1 0 2 \n" // _a :- b
-		    << "0\n2 b\n0\n"
-		    << "B+\n2\n0\nB-\n0\n1\n"
-		;
-		api.write(out);
-		CPPUNIT_ASSERT_EQUAL(exp.str(), out.str());		
+		toSmodels("x2. x4.");
+		CPPUNIT_ASSERT(compareSmodels(prg, api));
 	}
-
 	void testSimpleConstraintRule() {
-		std::stringstream prg;
-		prg << "2 1 3 0 2 3 2 4 \n"// a :- 2 {c, b, d}
-		    << "1 2 1 1 3 \n" // b :- not c.
-		    << "1 3 1 1 2 \n" // c :- not b.
-		    << "1 4 1 1 3 \n" // d :- not c.
-		    << "0\n1 a\n2 b\n3 c\n4 d\n"
-		    << "0\nB+\n0\nB-\n0\n1\n";
-
-		std::stringstream exp, out;
-		api.setExtendedRuleMode(Asp::LogicProgram::mode_transform_choice);
-		CPPUNIT_ASSERT_EQUAL(true, Input_t::parseLparse(prg, api));
+		toSmodels("x1 :- 2 {x3, x2, x4}.\n"
+			"x2 :- not x3.\n"
+			"x3 :- not x2.\n"
+			"x4 :- not x3.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
 		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
 		CPPUNIT_ASSERT_EQUAL(2u, ctx.numVars());
-		
-		exp << "5 1 2 2 0 3 2 1 2 \n"// a :- 2 [c = 1, b = 2]
-		    << "1 2 1 1 3 \n" // b :- not c.
-		    << "1 3 1 1 2 \n" // c :- not b.
-		    << "1 4 1 0 2 \n" // d :- b.
-		    << "0\n1 a\n2 b\n3 c\n4 d\n0\n"
-		    << "B+\n0\nB-\n0\n1\n"
-		;
-		api.write(out);
-		CPPUNIT_ASSERT_EQUAL(exp.str(), out.str());
+		toSmodels("x1 :- 2 {x3, x2 = 2}.\n"
+			"x2 :- not x3.\n"
+			"x3 :- not x2.\n"
+			"x4 :- x2.");
+		CPPUNIT_ASSERT(compareSmodels(prg, api));
 	}
-
 	void testSimpleWeightRule() {
-		std::stringstream prg;
-		prg << "5 1 2 3 0 3 2 4 2 1 3\n"// a :- 2 [c = 2, b = 1, d = 3], but (d = 3 -> d = 2)
-		    << "1 2 1 1 3 \n" // b :- not c.
-		    << "1 3 1 1 2 \n" // c :- not b.
-		    << "1 4 1 1 3 \n" // d :- not c.
-		    << "0\n1 a\n2 b\n3 c\n4 d\n"
-		    << "0\nB+\n0\nB-\n0\n1\n";
-
-		std::stringstream exp, out;
-		api.setExtendedRuleMode(Asp::LogicProgram::mode_transform_choice);
-		CPPUNIT_ASSERT_EQUAL(true, Input_t::parseLparse(prg, api));
+		toSmodels("x1 :- 2 {x3 = 2, x2 = 1, x4 = 3}. % but (x4 = 3 -> x4 = 2).\n"
+			"x2 :- not x3.\n"
+			"x3 :- not x2.\n"
+			"x4 :- not x3.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
 		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
 		CPPUNIT_ASSERT_EQUAL(2u, ctx.numVars());
-		
-		exp << "5 1 2 2 0 3 2 2 3 \n"// a :- 2 [c = 2, b = 3]
-		    << "1 2 1 1 3 \n" // b :- not c.
-		    << "1 3 1 1 2 \n" // c :- not b.
-		    << "1 4 1 0 2 \n" // d :- b.
-		    << "0\n1 a\n2 b\n3 c\n4 d\n0\n"
-		    << "B+\n0\nB-\n0\n1\n"
-		;
-		api.write(out);
-		CPPUNIT_ASSERT_EQUAL(exp.str(), out.str());
+		toSmodels("x1 :- 2 {x3 = 2, x2 = 3}.\n"
+			"x2 :- not x3.\n"
+			"x3 :- not x2.\n"
+			"x4 :- x2.");
+		CPPUNIT_ASSERT(compareSmodels(prg, api));
 	}
-
 	void testSimpleChoiceRule() {
-		std::stringstream prg;
-		prg << "3 3 1 2 3 2 1 3 2 \n"// {a,b,c} :- b, not c.
-		    << "1 2 1 1 1 \n" // b :- not a.
-		    << "1 3 1 1 2 \n" // c :- not b.
-		    << "0\n1 a\n2 b\n3 c\n"
-		    << "0\nB+\n0\nB-\n0\n1\n";
-		
-		api.setExtendedRuleMode(Asp::LogicProgram::mode_transform_weight);
-		CPPUNIT_ASSERT_EQUAL(true, Input_t::parseLparse(prg, api));
+		toSmodels("{x1;x2;x3} :- x2, not x3.\n"
+			"x2 :- not x1.\n"
+			"x3 :- not x2.\n");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
 		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
-		std::stringstream exp, out;
-		prg.clear();
-		prg.seekg(0);
-		exp << "1 2 0 0 \n"// b.
-		    << "0\n2 b\n"
-		    << "0\n"
-		    << "B+\n2\n0\nB-\n0\n1\n";
-		api.write(out);
-		CPPUNIT_ASSERT_EQUAL(exp.str(), out.str());		
+		toSmodels("x2.");
+		CPPUNIT_ASSERT(compareSmodels(prg, api));
 	}
-private:
+	void testMinimizePriority() {
+		toSmodels("{x1;x2;x3;x4}.\n"
+			"#minimize{not x1, not x2}.\n"
+			"#minimize{x3, x4}.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
+		SharedMinimizeData* m1 = ctx.minimize();
+		CPPUNIT_ASSERT(m1->numRules() == 2);
+		CPPUNIT_ASSERT(std::find(m1->lits, m1->lits + 2, WeightLiteral(api.getLiteral(3), 0)) != m1->lits + 2);
+		CPPUNIT_ASSERT(std::find(m1->lits, m1->lits + 2, WeightLiteral(api.getLiteral(4), 0)) != m1->lits + 2);
+		CPPUNIT_ASSERT(std::find(m1->lits + 2, m1->lits + 4, WeightLiteral(~api.getLiteral(1), 1)) != m1->lits + 4);
+		CPPUNIT_ASSERT(std::find(m1->lits + 2, m1->lits + 4, WeightLiteral(~api.getLiteral(2), 1)) != m1->lits + 4);
+	}
+	void testEdgeDirectives() {
+		toSmodels("{x1;x2}.\n"
+			"#output _edge(0,1)  : x1.\n"
+			"#output _acyc_1_1_0 : x2.");
+		CPPUNIT_ASSERT_EQUAL(true, parse(api, prg, ParserOptions().enableAcycEdges()));
+		CPPUNIT_ASSERT(api.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT_EQUAL(uint32(2), ctx.stats().acycEdges);
+	}
+	void testHeuristicDirectives() {
+		toSmodels("{x1;x2;x3}.\n"
+			"#output _heuristic(a,true,1) : x1.\n"
+			"#output _heuristic(_heuristic(a,true,1),true,1) : x2.\n"
+			"#output a : x3.");
+		CPPUNIT_ASSERT_EQUAL(true, parse(api, prg, ParserOptions().enableHeuristic()));
+		CPPUNIT_ASSERT(api.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(ctx.heuristic.size() == 2);
+	}
+	void testSimpleIncremental() {
+		toSmodels(
+			"#incremental.\n"
+			"{x1;x2} :-x3.\n"
+			"#external x3.\n"
+			"#step.\n"
+			"#external x3.[release]\n"
+			"{x3}.");
+		api.updateProgram();
+		ProgramParser& p = api.parser();
+		CPPUNIT_ASSERT_EQUAL(true, p.accept(prg));
+		CPPUNIT_ASSERT_EQUAL(true, p.parse());
+		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
+		CPPUNIT_ASSERT(p.more());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 1);
+		CPPUNIT_ASSERT(api.isExternal(3));
+		api.updateProgram();
+		CPPUNIT_ASSERT_EQUAL(true, p.parse());
+		CPPUNIT_ASSERT(!p.more());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 1);
+		CPPUNIT_ASSERT(!api.isExternal(3));
+	}
+	void testIncrementalMinimize() {
+		toSmodels(
+			"#incremental.\n"
+			"{x1; x2}.\n"
+			"#minimize{not x1, not x2}.\n"
+			"#step."
+			"#minimize{x1, x2}.\n");
+		api.updateProgram();
+		ProgramParser& p = api.parser();
+		CPPUNIT_ASSERT_EQUAL(true, p.accept(prg));
+		CPPUNIT_ASSERT_EQUAL(true, p.parse());
+		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
+		SharedMinimizeData* m1 = ctx.minimize();
+		m1->share();
+		CPPUNIT_ASSERT(std::find(m1->lits, m1->lits + 2, WeightLiteral(~api.getLiteral(1), 1)) != m1->lits + 2);
+		CPPUNIT_ASSERT(std::find(m1->lits, m1->lits + 2, WeightLiteral(~api.getLiteral(2), 1)) != m1->lits + 2);
+
+		CPPUNIT_ASSERT(p.more());
+		api.updateProgram();
+		CPPUNIT_ASSERT_EQUAL(true, p.parse());
+		CPPUNIT_ASSERT(!p.more());
+		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
+		SharedMinimizeData* m2 = ctx.minimize();
+		CPPUNIT_ASSERT(m1 != m2);
+		CPPUNIT_ASSERT(isSentinel(m2->lits[2].first));
+		CPPUNIT_ASSERT(std::find(m2->lits, m2->lits + 2, WeightLiteral(api.getLiteral(1), 1)) != m2->lits + 2);
+		CPPUNIT_ASSERT(std::find(m2->lits, m2->lits + 2, WeightLiteral(api.getLiteral(2), 1)) != m2->lits + 2);
+		m1->release();
+	}
+};
+class ClaspParserTest : public CppUnit::TestFixture {
+	CPPUNIT_TEST_SUITE(ClaspParserTest);
+	CPPUNIT_TEST(testEmptyProgram);
+	CPPUNIT_TEST(testSingleFact);
+	CPPUNIT_TEST(testSimpleRule);
+	CPPUNIT_TEST(testInvalidAtom);
+	CPPUNIT_TEST(testInvalidLiteral);
+	CPPUNIT_TEST(testIntegrityConstraint);
+	CPPUNIT_TEST(testDisjunctiveRule);
+	CPPUNIT_TEST(testChoiceRule);
+	CPPUNIT_TEST(testWeightRule);
+	CPPUNIT_TEST(testDisjunctiveWeightRule);
+	CPPUNIT_TEST(testChoiceWeightRule);
+	CPPUNIT_TEST(testInvalidNegativeWeightInWeightRule);
+	CPPUNIT_TEST(testInvalidHeadInWeightRule);
+	CPPUNIT_TEST(testNegativeBoundInWeightRule);
+	CPPUNIT_TEST(testMinimizeRule);
+	CPPUNIT_TEST(testMinimizeRuleMergePriority);
+	CPPUNIT_TEST(testMinimizeRuleWithNegativeWeights);
+	CPPUNIT_TEST(testIncremental);
+	CPPUNIT_TEST(testIncrementalExternal);
+	CPPUNIT_TEST(testSimpleEdgeDirective);
+	CPPUNIT_TEST(testComplexEdgeDirective);
+	CPPUNIT_TEST(testHeuristicDirective);
+	CPPUNIT_TEST(testOutputDirective);
+	CPPUNIT_TEST(testAssumptionDirective);
+	CPPUNIT_TEST(testProjectionDirective);
+	CPPUNIT_TEST(testEmptyProjectionDirective);
+	CPPUNIT_TEST(testIgnoreCommentDirective);
+	CPPUNIT_TEST(testReadTheoryAtoms);
+	CPPUNIT_TEST(testWriteTheoryAtoms);
+	CPPUNIT_TEST(testTheoryElementWithCondition);
+	CPPUNIT_TEST_SUITE_END();
+
+	std::stringstream prg;
 	SharedContext     ctx;
 	Asp::LogicProgram api;
+public:
+	void setUp() {
+		api.start(ctx, Asp::LogicProgram::AspOptions().noScc());
+	}
+	bool sameProgram(Asp::LogicProgram& a, std::stringstream& prg) {
+		std::stringstream out;
+		AspParser::write(a, out, AspParser::format_aspif);
+		prg.clear();
+		prg.seekg(0);
+		return compareProgram(prg, out);
+	}
+	void toAspif(const char* txt) {
+		prg.clear();
+		prg.str("");
+		AspifOutput aspif(prg);
+		Potassco::AspifTextInput x(&aspif);
+		std::stringstream temp; temp << txt;
+		CPPUNIT_ASSERT(Potassco::readProgram(temp, x, 0) == 0);
+	}
+	bool parseProgram() {
+		return parse(api, prg);
+	}
+	void testEmptyProgram() {
+		toAspif("");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 0);
+	}
+	void testSingleFact() {
+		toAspif("x1.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT_EQUAL(true, api.endProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 1);
+		CPPUNIT_ASSERT(api.getLiteral(1) == lit_true());
+	}
+	void testSimpleRule() {
+		toAspif("x1 :- x3, not x2.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 1);
+		CPPUNIT_ASSERT(api.numAtoms() == 3);
+		CPPUNIT_ASSERT(api.numBodies() == 1);
+		CPPUNIT_ASSERT(api.getBody(0)->size() == 2);
+		CPPUNIT_ASSERT(api.getBody(0)->goal(0) == posLit(3));
+		CPPUNIT_ASSERT(api.getBody(0)->goal(1) == negLit(2));
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testInvalidAtom() {
+		char buf[100];
+		toAspif(clasp_format(buf, 100, "x%u :- not x2, x3.", varMax));
+		CPPUNIT_ASSERT_THROW(parseProgram(), std::logic_error);
+	}
+	void testInvalidLiteral() {
+		char buf[100];
+		toAspif(clasp_format(buf, 100, "x1 :- not x%u, x3.", varMax));
+		CPPUNIT_ASSERT_THROW(parseProgram(), std::logic_error);
+	}
+	void testIntegrityConstraint() {
+		toAspif(":- not x1, x2.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 1);
+		CPPUNIT_ASSERT(api.numAtoms() == 2);
+		CPPUNIT_ASSERT(api.numBodies() == 1);
+		CPPUNIT_ASSERT(api.getBody(0)->size() == 2);
+		CPPUNIT_ASSERT(api.getBody(0)->goal(0) == posLit(2));
+		CPPUNIT_ASSERT(api.getBody(0)->goal(1) == negLit(1));
+		CPPUNIT_ASSERT(api.getBody(0)->value() == value_false);
+	}
+	void testDisjunctiveRule() {
+		toAspif("x1|x2.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 1);
+		CPPUNIT_ASSERT(api.stats.disjunctions[0] == 1);
+		CPPUNIT_ASSERT(api.numAtoms() == 2);
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testChoiceRule() {
+		toAspif("{x1;x2;x3}.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 1);
+		CPPUNIT_ASSERT(api.stats.rules[0][Asp::RuleStats::Choice] == 1);
+		CPPUNIT_ASSERT(api.numAtoms() == 3);
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testWeightRule() {
+		toAspif(
+			"x1 :- 2{x2, x3, not x4}.\n"
+			"x5 :- 4{x2 = 2, x3, not x4 = 3}.\n");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 2);
+		CPPUNIT_ASSERT(api.stats.bodies[0][Asp::Body_t::Sum] == 1);
+		CPPUNIT_ASSERT(api.stats.bodies[0][Asp::Body_t::Count] == 1);
+		CPPUNIT_ASSERT(api.numBodies() == 2);
+		CPPUNIT_ASSERT(api.getBody(0)->bound() == 2 && !api.getBody(0)->hasWeights());
+		CPPUNIT_ASSERT(api.getBody(1)->bound() == 4 && api.getBody(1)->hasWeights());
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testDisjunctiveWeightRule() {
+		toAspif("x1|x2 :- 2{x3, x4, not x5}.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testChoiceWeightRule() {
+		toAspif("{x1;x2} :- 2{x3, x4, not x5}.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testInvalidNegativeWeightInWeightRule() {
+		toAspif("x1 :- 2 {x2 = -1, not x3 = 1, x4}.");
+		CPPUNIT_ASSERT_THROW(parseProgram(), std::logic_error);
+	}
+	void testInvalidHeadInWeightRule() {
+		prg 
+			<< "asp 1 0 0"
+			<< "\n1 0 1 0 1 2 3 2 1 -3 1 4 1"
+			<< "\n0\n";
+		CPPUNIT_ASSERT_THROW(parseProgram(), std::logic_error);
+	}
+	void testNegativeBoundInWeightRule() {
+		toAspif("x1 :- -1 {x2, not x3, x4}.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 1);
+		CPPUNIT_ASSERT(api.stats.bodies[0][Asp::Body_t::Sum] == 0);
+	}
+	void testMinimizeRule() {
+		toAspif(
+			"{x1;x2;x3}.\n"
+			"#minimize{x1 = 2, x2, not x3 = 4}.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0][Asp::RuleStats::Minimize] == 1);
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testMinimizeRuleMergePriority() {
+		toAspif(
+			"#minimize{x1 = 2, x2, not x3 = 4}@1.\n"
+			"#minimize{x4 = 2, x2 = 2, x3 = 4}@1.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 1);
+		CPPUNIT_ASSERT(api.stats.rules[0][Asp::RuleStats::Minimize] == 1);
+	}
+	void testMinimizeRuleWithNegativeWeights() {
+		toAspif("#minimize{x4 = -2, x2 = -1, x3 = 4}.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 1);
+		CPPUNIT_ASSERT(api.endProgram());
+		std::stringstream exp("6 0 2 2 4 2 2 1 ");
+		CPPUNIT_ASSERT(findSmodels(exp, api));
+	}
+	void testIncremental() {
+		toAspif("#incremental.\n"
+			"{x1;x2}.\n"
+			"#minimize{x1=2, x2}.\n"
+			"#step.\n"
+			"{x3}.\n"
+			"#minimize{x3=4}.\n");
+		
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() == 2);
+		CPPUNIT_ASSERT(api.endProgram());
+
+		ProgramParser& p = api.parser();
+		CPPUNIT_ASSERT(p.more());
+		api.updateProgram();
+		CPPUNIT_ASSERT_EQUAL(true , p.parse());
+		CPPUNIT_ASSERT_EQUAL(false, p.more());
+		CPPUNIT_ASSERT(api.stats.rules[0].sum() > 0);
+		// minimize rule was merged
+		CPPUNIT_ASSERT(ctx.minimize()->numRules() == 1);
+	}
+	void testIncrementalExternal() {
+		toAspif("#incremental."
+			"x1 :- x2.\n"
+			"#external x2. [true]\n"
+			"#step.\n"
+			"#external x2. [false]\n"
+			"#step.\n"
+			"#external x2. [release]\n");
+		
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.endProgram());
+		LitVec assume;
+		api.getAssumptions(assume);
+		CPPUNIT_ASSERT(assume.size() == 1 && assume[0] == api.getLiteral(2));
+
+		ProgramParser& p = api.parser();
+		CPPUNIT_ASSERT(p.more());
+		api.updateProgram();
+		CPPUNIT_ASSERT_EQUAL(true, p.parse());
+
+		CPPUNIT_ASSERT(api.endProgram());
+		assume.clear();
+		api.getAssumptions(assume);
+		CPPUNIT_ASSERT(assume.size() == 1 && assume[0] == ~api.getLiteral(2));
+
+		CPPUNIT_ASSERT(p.more());
+		api.updateProgram();
+		CPPUNIT_ASSERT_EQUAL(true, p.parse());
+		CPPUNIT_ASSERT(!p.more());
+		CPPUNIT_ASSERT(api.endProgram());
+		assume.clear();
+		api.getAssumptions(assume);
+		CPPUNIT_ASSERT(assume.empty());
+		ctx.endInit();
+		CPPUNIT_ASSERT(ctx.master()->isFalse(api.getLiteral(2)));
+	}
+	void testSimpleEdgeDirective() {
+		toAspif("{x1;x2}."
+			"#edge (0,1) : x1.\n"
+			"#edge (1,0) : x2.\n");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(ctx.stats().acycEdges == 2);
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testComplexEdgeDirective() {
+		toAspif("{x1;x2;x3;x4}."
+			"#edge (0,1) : x1, not x2.\n"
+			"#edge (1,0) : x3, not x4.\n");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(ctx.stats().acycEdges == 2);
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testHeuristicDirective() {
+		toAspif("{x1;x2;x3;x4}."
+			"#heuristic x1. [-1@1,sign]\n"
+			"#heuristic x1 : x3, not x4. [1@1,factor]");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(ctx.heuristic.size() == 2);
+		CPPUNIT_ASSERT(ctx.heuristic.begin()->type() == DomModType::Sign);
+		CPPUNIT_ASSERT((ctx.heuristic.begin() + 1)->type() == DomModType::Factor);
+		CPPUNIT_ASSERT(ctx.heuristic.begin()->var() == (ctx.heuristic.begin() + 1)->var());
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+
+	void testOutputDirective() {
+		toAspif("{x1;x2}."
+			"#output fact.\n"
+			"#output conj : x1, x2.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(ctx.output.size() == 2);
+		CPPUNIT_ASSERT(ctx.output.numFacts() == 1);
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testAssumptionDirective() {
+		toAspif("{x1;x2}."
+			"#assume{not x2, x1}.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.endProgram());
+		LitVec assume;
+		api.getAssumptions(assume);
+		CPPUNIT_ASSERT(assume.size() == 2);
+		CPPUNIT_ASSERT(std::find(assume.begin(), assume.end(), ~api.getLiteral(2)) != assume.end());
+		CPPUNIT_ASSERT(std::find(assume.begin(), assume.end(), api.getLiteral(1)) != assume.end());
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testProjectionDirective() {
+		toAspif("{x1;x2;x3;x4}."
+			"#output a : x1.\n"
+			"#output b : x2.\n"
+			"#output c : x3.\n"
+			"#output d : x4.\n"
+			"#project{x1, x3}.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.endProgram());
+		CPPUNIT_ASSERT(ctx.output.size() == 4);
+		Literal a = api.getLiteral(1);
+		Literal b = api.getLiteral(2);
+		Literal c = api.getLiteral(3);
+		Literal d = api.getLiteral(4);
+		OutputTable::lit_iterator proj_begin = ctx.output.proj_begin(), proj_end = ctx.output.proj_end();
+		CPPUNIT_ASSERT_EQUAL(true , std::find(proj_begin, proj_end, a) != proj_end);
+		CPPUNIT_ASSERT_EQUAL(false, std::find(proj_begin, proj_end, b) != proj_end);
+		CPPUNIT_ASSERT_EQUAL(true , std::find(proj_begin, proj_end, c) != proj_end);
+		CPPUNIT_ASSERT_EQUAL(false, std::find(proj_begin, proj_end, d) != proj_end);
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testEmptyProjectionDirective() {
+		toAspif("{x1;x2;x3;x4}."
+			"#project.");
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.endProgram());
+		CPPUNIT_ASSERT(ctx.output.projectMode() == OutputTable::project_explicit);
+		CPPUNIT_ASSERT(sameProgram(api, prg));
+	}
+	void testIgnoreCommentDirective() {
+		prg
+			<< "asp 1 0 0"
+			<< "\n" << Potassco::Directive_t::Comment << " Ignore me!"
+			<< "\n0\n";
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+	}
+	void testReadTheoryAtoms() {
+		AspifOutput aspif(prg);
+		aspif.initProgram(false);
+		aspif.beginStep();
+		aspif.theoryTerm(0, 1);                     // (number 1)
+		aspif.theoryTerm(1, 2);                     // (number 2)
+		aspif.theoryTerm(2, 3);                     // (number 3)
+		aspif.theoryTerm(3, 4);                     // (number 4)
+		aspif.theoryTerm(4, Potassco::toSpan("x")); // (string x)
+		aspif.theoryTerm(5, Potassco::toSpan("z")); // (string z)
+		aspif.theoryTerm(6, Potassco::toSpan("+")); // (string +)
+		aspif.theoryTerm(7, Potassco::toSpan("*")); // (string *)
+		VarVec ids;
+		aspif.theoryTerm(8,  4, SPAN(ids, 0));         // (function x(1))
+		aspif.theoryTerm(9,  4, SPAN(ids, 1));         // (function x(2))
+		aspif.theoryTerm(10, 4, SPAN(ids, 2));         // (function x(3))
+		aspif.theoryTerm(11, 7, SPAN(ids, 0, 8));      // (term 1*x(1))
+		aspif.theoryTerm(12, 7, SPAN(ids, 1, 9));      // (term 2*x(2))
+		aspif.theoryTerm(13, 7, SPAN(ids, 2, 10));     // (term 3*x(3))
+		aspif.theoryTerm(14, 7, SPAN(ids, 3, 5));      // (term 3*x(3))
+		
+		aspif.theoryElement(0, SPAN(ids, 11), empty);      // (element 1*x(1):)
+		aspif.theoryElement(1, SPAN(ids, 12), empty);      // (element 2*x(2):)
+		aspif.theoryElement(2, SPAN(ids, 13), empty);      // (element 3*x(3):)
+		aspif.theoryElement(3, SPAN(ids, 14), empty);      // (element 4*z:)
+		aspif.theoryTerm(15, Potassco::toSpan("sum"));    // (string sum)
+		aspif.theoryTerm(16, Potassco::toSpan(">="));     // (string >=)
+		aspif.theoryTerm(17, 42);                         // (number 42)
+		aspif.theoryAtom(1, 15, SPAN(ids, 0, 1, 2, 3), 16, 17); // (&sum { 1*x(1); 2*x(2); 3*x(3); 4*z     } >= 42)
+		aspif.endStep();
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+
+		Potassco::TheoryData& t = api.theoryData();
+		CPPUNIT_ASSERT(t.numAtoms() == 1);
+
+		const Potassco::TheoryAtom& a = **t.begin();
+		CPPUNIT_ASSERT(a.atom() == 1);
+		CPPUNIT_ASSERT(std::strcmp(t.getTerm(a.term()).symbol(), "sum") == 0);
+		CPPUNIT_ASSERT(a.size() == 4);
+		for (Potassco::TheoryAtom::iterator it = a.begin(), end = a.end(); it != end; ++it) {
+			const Potassco::TheoryElement& e = t.getElement(*it);
+			CPPUNIT_ASSERT(e.size() == 1);
+			CPPUNIT_ASSERT(Literal::fromId(e.condition()) == lit_true());
+			CPPUNIT_ASSERT(t.getTerm(*e.begin()).type() == Potassco::Theory_t::Compound);
+		}
+		CPPUNIT_ASSERT(std::strcmp(t.getTerm(*a.guard()).symbol(), ">=") == 0);
+		CPPUNIT_ASSERT(t.getTerm(*a.rhs()).number() == 42);
+
+		struct BuildStr : public Potassco::TheoryData::Visitor {
+			virtual void visit(const Potassco::TheoryData& data, const Potassco::TheoryAtom& a) {
+				std::string rhs, op, at("&");
+				data.accept(a, *this);
+				if (a.guard()) { rhs = popStack(1 + (a.rhs() != 0), " "); }
+				if (a.size())  { op  = popStack(a.size(), "; "); }
+				at.append(popStack(1, "")).append("{").append(op).append("} ").append(rhs);
+				exp.push_back(at);
+			}
+			virtual void visit(const Potassco::TheoryData& data, Potassco::Id_t, const Potassco::TheoryElement& e) {
+				data.accept(e, *this);
+				if (e.size() > 1) { exp.push_back(popStack(e.size(), ", ")); }
+			}
+			virtual void visit(const Potassco::TheoryData& data, Potassco::Id_t, const Potassco::TheoryTerm& t) {
+				std::stringstream n;
+				switch (t.type()) {
+					case Potassco::Theory_t::Number: n << t.number(); exp.push_back(n.str()); break;
+					case Potassco::Theory_t::Symbol: exp.push_back(t.symbol()); break;
+					case Potassco::Theory_t::Compound: {
+						data.accept(t, *this);
+						const char* parens = Potassco::toString(t.isTuple() ? t.tuple() : Potassco::Tuple_t::Paren);
+						std::string op = popStack((uint32)t.isFunction(), "");
+						op.append(1, parens[0]).append(popStack(t.size(), ", ")).append(1, parens[1]);
+						exp.push_back(op);
+					}
+				}
+			}
+			std::string popStack(uint32 n, const char* delim) {
+				assert(n <= exp.size());
+				std::string op;
+				for (uint32 i = exp.size() - n; i != exp.size(); ++i) {
+					if (!op.empty()) { op += delim; }
+					op += exp[i];
+				}
+				exp.erase(exp.end() - n, exp.end());
+				return op;
+			}
+			std::vector<std::string> exp;
+		} toStr;
+		t.accept(toStr);
+		CPPUNIT_ASSERT(toStr.exp[0] == "&sum{*(1, x(1)); *(2, x(2)); *(3, x(3)); *(4, z)} >= 42");
+	}
+	
+	void testWriteTheoryAtoms() {
+		VarVec ids;
+		AspifOutput aspif(prg);
+		aspif.initProgram(true);
+		aspif.beginStep();
+		aspif.rule(Potassco::Head_t::Choice, SPAN(ids, 1), empty);
+		aspif.theoryTerm(0, 1);                      // (number 1)
+		aspif.theoryTerm(1, Potassco::toSpan("x"));  // (string x)
+		aspif.theoryTerm(3, Potassco::toSpan("foo"));// (string foo)
+		aspif.theoryTerm(2, 1, SPAN(ids, 0));         // (function x(1))
+		aspif.theoryElement(0, SPAN(ids, 2), empty);  // (element x(1):)
+		aspif.theoryAtom(1, 3, SPAN(ids, 0));         // (&foo { x(1); })
+		aspif.endStep();
+		std::stringstream step1;
+		step1 << prg.str();
+		aspif.beginStep();
+		aspif.rule(Potassco::Head_t::Choice, SPAN(ids, 2), empty);
+		aspif.theoryAtom(2, 3, SPAN(ids, 0));              // (&foo { x(1); })
+		aspif.endStep();
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		CPPUNIT_ASSERT(api.endProgram() && api.theoryData().numAtoms() == 1);
+		std::stringstream out;
+		AspParser::write(api, out);
+		CPPUNIT_ASSERT(findProgram(step1, out));
+		ProgramParser& p = api.parser();
+		CPPUNIT_ASSERT(p.more());
+		api.updateProgram();
+		CPPUNIT_ASSERT(api.theoryData().numAtoms() == 0);
+		CPPUNIT_ASSERT_EQUAL(true, p.parse());
+		CPPUNIT_ASSERT(api.endProgram() && api.theoryData().numAtoms() == 1);
+		AspParser::write(api, out);
+	}
+	void testTheoryElementWithCondition() {
+		VarVec ids;
+		AspifOutput aspif(prg);
+		aspif.initProgram(false);
+		aspif.beginStep();
+		aspif.rule(Potassco::Head_t::Choice, SPAN(ids, 1, 2), empty);
+		aspif.theoryTerm(0, 1); // (number 1)
+		aspif.theoryTerm(1, Potassco::toSpan("foo"));
+		Potassco::Lit_t lits[2] = {1, -2};
+		aspif.theoryElement(0, SPAN(ids, 0), Potassco::toSpan(lits, 2));
+		aspif.theoryAtom(0, 1, SPAN(ids, 0));
+		aspif.endStep();
+		CPPUNIT_ASSERT_EQUAL(true, parseProgram());
+		prg.clear();
+		prg.seekg(0);
+		Potassco::TheoryData& t = api.theoryData();
+		CPPUNIT_ASSERT(t.numAtoms() == 1);
+		const Potassco::TheoryAtom& a = **t.begin();
+		CPPUNIT_ASSERT(a.size() == 1);
+		const Potassco::TheoryElement& e = t.getElement(*a.begin());
+		CPPUNIT_ASSERT(e.condition() != 0);
+		Potassco::LitVec cond;
+		api.extractCondition(e.condition(), cond);
+		CPPUNIT_ASSERT(cond.size() == 2);
+		std::stringstream out;
+		CPPUNIT_ASSERT(api.endProgram());
+		AspParser::write(api, out);
+		CPPUNIT_ASSERT(findProgram(out, prg));
+	}
 };
 
 class DimacsParserTest : public CppUnit::TestFixture {
-
   CPPUNIT_TEST_SUITE(DimacsParserTest);
 	CPPUNIT_TEST(testDimacs);
 	CPPUNIT_TEST(testDimacsDontAddTaut);
@@ -237,6 +767,14 @@ class DimacsParserTest : public CppUnit::TestFixture {
 
 	CPPUNIT_TEST(testWcnf);
 	CPPUNIT_TEST(testPartialWcnf);
+
+	CPPUNIT_TEST(testDimacsExtSupportsGraph);
+	CPPUNIT_TEST(testDimacsExtSupportsCostFunc);
+	CPPUNIT_TEST(testDimacsExtSupportsProject);
+	CPPUNIT_TEST(testDimacsExtSupportsHeuristic);
+	CPPUNIT_TEST(testDimacsExtSupportsAssumptions);
+	CPPUNIT_TEST(testDimacsExtSupportsOutputRange);
+	CPPUNIT_TEST(testDimacsExtSupportsOutputTable);
 	CPPUNIT_TEST_SUITE_END();
 
 public:
@@ -250,7 +788,7 @@ public:
 		    << "1 2 0\n"
 		    << "3 4 0\n"
 		    << "-1 -2 -3 -4 0\n";
-		CPPUNIT_ASSERT(Input_t::parseDimacs(prg, api) && api.endProgram());
+		CPPUNIT_ASSERT(parse(api, prg) && api.endProgram());
 		CPPUNIT_ASSERT(ctx.numVars() == 4);
 		CPPUNIT_ASSERT(ctx.numConstraints() == 3);
 	}
@@ -263,7 +801,7 @@ public:
 		    << "3 4 0\n"
 		    << "-1 -2 -3 -4 0\n"
 		    << "1 -2 -3 2 0\n";
-		CPPUNIT_ASSERT(Input_t::parseDimacs(prg, api) && api.endProgram());
+		CPPUNIT_ASSERT(parse(api, prg) && api.endProgram());
 		CPPUNIT_ASSERT(ctx.numVars() == 4);
 		CPPUNIT_ASSERT(ctx.numConstraints() == 3);
 	}
@@ -276,7 +814,7 @@ public:
 		    << "1 2 1 2 0\n"
 		    << "-1 -2 -1 0\n"
 		    << "-2 -1 -2 0\n";
-		CPPUNIT_ASSERT(Input_t::parseDimacs(prg, api) && api.endProgram());
+		CPPUNIT_ASSERT(parse(api, prg) && api.endProgram());
 		CPPUNIT_ASSERT(ctx.numVars() == 2);
 		CPPUNIT_ASSERT(ctx.numConstraints() == 4);
 		CPPUNIT_ASSERT(ctx.numBinary() == 4);
@@ -286,7 +824,7 @@ public:
 		std::stringstream prg;
 		prg << "p cnf 2 1\n"
 		    << "3 4 0\n";
-		CPPUNIT_ASSERT_THROW(Input_t::parseDimacs(prg, api), ParseError);
+		CPPUNIT_ASSERT_THROW(parse(api, prg), std::logic_error);
 	}
 
 	void testWcnf() {
@@ -298,12 +836,12 @@ public:
 		    << "8 -3 2 0\n"
 		    << "5 1 3 0\n"
 		    << "2 3 0\n";
-		CPPUNIT_ASSERT(Input_t::parseDimacs(prg, api) && api.endProgram());
+		CPPUNIT_ASSERT(parse(api, prg) && api.endProgram());
 		CPPUNIT_ASSERT(ctx.numVars() == 7);
-		CPPUNIT_ASSERT(ctx.symbolTable().size() == 4);
+		CPPUNIT_ASSERT(ctx.output.size() == 3);
 		CPPUNIT_ASSERT(ctx.numConstraints() == 4);
 
-		SharedMinimizeData* wLits = api.getMinimizeConstraint();
+		SharedMinimizeData* wLits = ctx.minimize();
 		CPPUNIT_ASSERT(wLits->numRules() == 1);
 		CPPUNIT_ASSERT(wLits->lits[0].second == 10);
 		CPPUNIT_ASSERT(wLits->lits[1].second == 8);
@@ -320,15 +858,118 @@ public:
 		    << "8 -2 -4 0\n"
 		    << "4 -3 2 0\n"
 		    << "1 1 3 0\n";
-		CPPUNIT_ASSERT(Input_t::parseDimacs(prg, api) && api.endProgram());
+		CPPUNIT_ASSERT(parse(api, prg) && api.endProgram());
 		CPPUNIT_ASSERT(ctx.numVars() == 7);
-		CPPUNIT_ASSERT(ctx.symbolTable().size() == 5);
+		CPPUNIT_ASSERT(ctx.output.size() == 4);
 		CPPUNIT_ASSERT(ctx.numConstraints() == 5);
-		SharedMinimizeData* wLits = api.getMinimizeConstraint();
+		SharedMinimizeData* wLits = ctx.minimize();;
 		CPPUNIT_ASSERT(wLits->numRules() == 1);
 		CPPUNIT_ASSERT(wLits->lits[0].second == 8);
 		CPPUNIT_ASSERT(wLits->lits[1].second == 4);
 		CPPUNIT_ASSERT(wLits->lits[2].second == 1);
+	}
+	void testDimacsExtSupportsGraph() {
+		std::stringstream prg;
+		prg
+			<< "p cnf 4 3\n"
+			<< "c graph 2\n"
+			<< "c node 1 1\n"
+			<< "c node 2 1\n"
+			<< "c arc 1 1 2\n"
+			<< "c arc 2 2 1\n"
+			<< "c endgraph\n"
+			<< "1 2 0\n"
+			<< "3 4 0\n"
+			<< "-1 -2 -3 -4 0\n";
+		CPPUNIT_ASSERT(parse(api, prg, ParserOptions().enableAcycEdges()) && api.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT_EQUAL(uint32(2), ctx.stats().acycEdges);
+	}
+	void testDimacsExtSupportsCostFunc() {
+		std::stringstream prg;
+		prg 
+			<< "p cnf 4 3\n"
+			<< "c minweight 1 2 2 4 -3 1 -4 2 0\n"
+			<< "1 2 0\n"
+			<< "3 4 0\n"
+			<< "-1 -2 -3 -4 0\n";
+		CPPUNIT_ASSERT(parse(api, prg, ParserOptions().enableMinimize()) && api.endProgram());
+		CPPUNIT_ASSERT(ctx.hasMinimize());
+		SharedMinimizeData* wLits = ctx.minimize();;
+		CPPUNIT_ASSERT(wLits->numRules() == 1);
+		CPPUNIT_ASSERT(wLits->lits[0] == WeightLiteral(posLit(2), 4));
+		CPPUNIT_ASSERT(wLits->lits[1] == WeightLiteral(posLit(1), 2));
+		CPPUNIT_ASSERT(wLits->lits[2] == WeightLiteral(negLit(4), 2));
+		CPPUNIT_ASSERT(wLits->lits[3] == WeightLiteral(negLit(3), 1));
+	}
+	void testDimacsExtSupportsProject() {
+		std::stringstream prg;
+		prg
+			<< "p cnf 4 3\n"
+			<< "c project 1 4\n"
+			<< "1 2 0\n"
+			<< "3 4 0\n"
+			<< "-1 -2 -3 -4 0\n";
+		CPPUNIT_ASSERT(parse(api, prg, ParserOptions().enableProject()) && api.endProgram());
+		CPPUNIT_ASSERT(ctx.output.projectMode() == OutputTable::project_explicit);
+		CPPUNIT_ASSERT(std::find(ctx.output.proj_begin(), ctx.output.proj_end(), posLit(1)) != ctx.output.proj_end());
+		CPPUNIT_ASSERT(std::find(ctx.output.proj_begin(), ctx.output.proj_end(), posLit(4)) != ctx.output.proj_end());
+	}
+	void testDimacsExtSupportsHeuristic() {
+		std::stringstream prg;
+		prg
+			<< "p cnf 4 0\n"
+			<< "c heuristic 4 1 1 0 0\n"
+			<< "c heuristic 5 2 1 0 0\n"
+			<< "c heuristic 5 3 1 0 -1\n";
+		CPPUNIT_ASSERT(parse(api, prg, ParserOptions().enableHeuristic()) && api.endProgram());
+		CPPUNIT_ASSERT(ctx.heuristic.size() == 3);
+		DomainTable::iterator it, end = ctx.heuristic.end();
+		for (it = ctx.heuristic.begin(); it != end && it->var() != 3; ++it) { ;  }
+		CPPUNIT_ASSERT_MESSAGE("'_heuristic(3,false,1,0) : -1' not found", it != end);
+		CPPUNIT_ASSERT(it->bias() == 1);
+		CPPUNIT_ASSERT(it->prio() == 0);
+		CPPUNIT_ASSERT(it->type() == Potassco::Heuristic_t::False);
+		CPPUNIT_ASSERT(it->cond() == negLit(1));
+	}
+	void testDimacsExtSupportsAssumptions() {
+		std::stringstream prg;
+		prg
+			<< "p cnf 4 0\n"
+			<< "c assume 1 -2 3\n";
+		CPPUNIT_ASSERT(parse(api, prg, ParserOptions().enableAssume()) && api.endProgram());
+		LitVec ass;
+		api.getAssumptions(ass);
+		CPPUNIT_ASSERT(ass.size() == 3);
+		CPPUNIT_ASSERT(ass[0] == posLit(1));
+		CPPUNIT_ASSERT(ass[1] == negLit(2));
+		CPPUNIT_ASSERT(ass[2] == posLit(3));
+	}
+	void testDimacsExtSupportsOutputRange() {
+		std::stringstream prg;
+		prg
+			<< "p cnf 4 0\n"
+			<< "c output range 2 3\n";
+		CPPUNIT_ASSERT(parse(api, prg, ParserOptions().enableOutput()) && api.endProgram());
+		CPPUNIT_ASSERT(*ctx.output.vars_begin()   == 2);
+		CPPUNIT_ASSERT(*(ctx.output.vars_end()-1) == 3);
+	}
+	void testDimacsExtSupportsOutputTable() {
+		std::stringstream prg;
+		prg
+			<< "p cnf 4 0\n"
+			<< "c output 1  var(1)      \n"
+			<< "c output -2 not_var(2)  \n"
+			<< "c 0\n";
+		CPPUNIT_ASSERT(parse(api, prg, ParserOptions().enableOutput()) && api.endProgram());
+		CPPUNIT_ASSERT(ctx.output.vars_begin() == ctx.output.vars_end());
+		CPPUNIT_ASSERT(ctx.output.size() == 2);
+		for (OutputTable::pred_iterator it = ctx.output.pred_begin(), end = ctx.output.pred_end(); it != end; ++it) {
+			CPPUNIT_ASSERT(
+				(it->name.c_str() == std::string("var(1)") && it->cond == posLit(1))
+				||
+				(it->name.c_str() == std::string("not_var(2)") && it->cond == negLit(2))
+				);
+		}
 	}
 private:
 	SharedContext ctx;
@@ -336,14 +977,16 @@ private:
 };
 
 class OPBParserTest : public CppUnit::TestFixture {
-
   CPPUNIT_TEST_SUITE(OPBParserTest);
 	CPPUNIT_TEST(testWBO);
 	CPPUNIT_TEST(testNLC);
 	CPPUNIT_TEST(testNLCUnsorted);
 	CPPUNIT_TEST(testPBEqualityBug);
+	CPPUNIT_TEST(testPBProject);
+	CPPUNIT_TEST(testPBAssume);
+	CPPUNIT_TEST(testPBOutput);
+	CPPUNIT_TEST(testPBOutputTable);
 	CPPUNIT_TEST_SUITE_END();
-
 public:
 	void setUp() {
 		api.startProgram(ctx);
@@ -354,15 +997,16 @@ public:
 		    << "soft: 6 ;\n"
 		    << "[2] +1 x1 >= 1 ;\n"
 		    << "[3] -1 x1 >= 0 ;\n";
-		CPPUNIT_ASSERT(Input_t::parseOPB(prg, api) && api.endProgram());
+		CPPUNIT_ASSERT(parse(api, prg) && api.endProgram());
 		CPPUNIT_ASSERT(ctx.numVars() == 3);
 		CPPUNIT_ASSERT(ctx.numConstraints() == 0 || ctx.numConstraints() == 2);
-		CPPUNIT_ASSERT(ctx.symbolTable().size() == 2);
+		CPPUNIT_ASSERT(ctx.output.size() == 1);
 		SumVec bound;
-		SharedMinimizeData* wLits = api.getMinimizeConstraint(&bound);
-		CPPUNIT_ASSERT(wLits && wLits->numRules() == 1);
-		CPPUNIT_ASSERT(wLits->adjust(0) == 2);
+		api.getWeakBounds(bound);
 		CPPUNIT_ASSERT(bound.size() == 1 && bound[0] == 5);
+		SharedMinimizeData* wLits = ctx.minimize();
+		CPPUNIT_ASSERT(wLits && wLits->numRules() == 1);
+		CPPUNIT_ASSERT(wLits->adjust(0) == 2);	
 	}
 
 	void testNLC() {
@@ -372,10 +1016,10 @@ public:
 		    << "-1 x1 +4 x2 -2 x5 >= 3;\n"
 		    << "10 x4 +4 x3 >= 10;\n"
 		    << "2 x2 x3 +3 x4 ~x5 +2 ~x1 x2 +3 ~x1 x2 x3 ~x4 ~x5 >= 1 ;\n";
-		CPPUNIT_ASSERT(Input_t::parseOPB(prg, api) && api.endProgram());
+		CPPUNIT_ASSERT(parse(api, prg) && api.endProgram());
 		CPPUNIT_ASSERT(ctx.numVars() == 10);
 		CPPUNIT_ASSERT(ctx.numConstraints() >= 4);
-		CPPUNIT_ASSERT(ctx.symbolTable().size() == 6);
+		CPPUNIT_ASSERT(ctx.output.size() == 5);
 	}
 
 	void testNLCUnsorted() {
@@ -383,7 +1027,7 @@ public:
 		prg << "* #variable= 4 #constraint= 2 #product= 2 sizeproduct= 8\n"
 		    << "1 x1 +1 x2 x1 >=1;\n"
 		    << "1 x1 +1 x2 x3 x4 ~x4 x2 x3 >=1;\n";
-		CPPUNIT_ASSERT(Input_t::parseOPB(prg, api) && api.endProgram());
+		CPPUNIT_ASSERT(parse(api, prg) && api.endProgram());
 		CPPUNIT_ASSERT(ctx.numVars() == 6);
 		CPPUNIT_ASSERT(ctx.master()->isTrue(posLit(1)));
 		CPPUNIT_ASSERT(ctx.master()->isFalse(posLit(6)));
@@ -394,18 +1038,64 @@ public:
 		prg << "* #variable= 4 #constraint= 2\n"
 		    << "+1 x1 = 1;\n"
 		    << "+1 x1 +1 x2 +1 x3 +1 x4 = 1;\n";
-		CPPUNIT_ASSERT(Input_t::parseOPB(prg, api) && api.endProgram());
+		CPPUNIT_ASSERT(parse(api, prg) && api.endProgram());
 		CPPUNIT_ASSERT(ctx.master()->isTrue(posLit(1)));
 		CPPUNIT_ASSERT(ctx.master()->isFalse(posLit(2)));
 		CPPUNIT_ASSERT(ctx.master()->isFalse(posLit(3)));
 		CPPUNIT_ASSERT(ctx.master()->isFalse(posLit(4)));
+	}
+	void testPBProject() {
+		std::stringstream prg;
+		prg << "* #variable= 6 #constraint= 0\n"
+			<< "* project x1 x2\n"
+			<< "* project x4\n";
+		CPPUNIT_ASSERT(parse(api, prg, ParserOptions().enableProject()) && api.endProgram());
+		CPPUNIT_ASSERT(ctx.output.projectMode() == OutputTable::project_explicit);
+		CPPUNIT_ASSERT(std::distance(ctx.output.proj_begin(), ctx.output.proj_end()) == 3u);
+	}
+	void testPBAssume() {
+		std::stringstream prg;
+		prg << "* #variable= 6 #constraint= 0\n"
+			  << "* assume x1 -x5\n";
+		CPPUNIT_ASSERT(parse(api, prg, ParserOptions().enableAssume()) && api.endProgram());
+		LitVec ass;
+		api.getAssumptions(ass);
+		CPPUNIT_ASSERT(ass.size() == 2);
+		CPPUNIT_ASSERT(ass[0] == posLit(1));
+		CPPUNIT_ASSERT(ass[1] == negLit(5));
+	}
+	void testPBOutput() {
+		std::stringstream prg;
+		prg << "* #variable= 6 #constraint= 0\n"
+			<< "* output range x2 x4\n";
+		CPPUNIT_ASSERT(parse(api, prg, ParserOptions().enableOutput()) && api.endProgram());
+		CPPUNIT_ASSERT(*ctx.output.vars_begin()  == 2);
+		CPPUNIT_ASSERT(*(ctx.output.vars_end()-1)== 4);
+	}
+	void testPBOutputTable() {
+		std::stringstream prg;
+		prg << "* #variable= 6 #constraint= 0\n"
+		  << "* output x1 var(1)\n"
+		  << "* output -x2 not_var(2)\n"
+		  << "* 0\n";
+		CPPUNIT_ASSERT(parse(api, prg, ParserOptions().enableOutput()) && api.endProgram());
+		CPPUNIT_ASSERT(ctx.output.vars_begin() == ctx.output.vars_end());
+		CPPUNIT_ASSERT(ctx.output.size() == 2);
+		for (OutputTable::pred_iterator it = ctx.output.pred_begin(), end = ctx.output.pred_end(); it != end; ++it) {
+			CPPUNIT_ASSERT(
+				(it->name.c_str() == std::string("var(1)") && it->cond == posLit(1))
+				||
+				(it->name.c_str() == std::string("not_var(2)") && it->cond == negLit(2))
+				);
+		}
 	}
 private:
 	SharedContext ctx;
 	PBBuilder     api;
 };
 
-CPPUNIT_TEST_SUITE_REGISTRATION(LparseParserTest);
+CPPUNIT_TEST_SUITE_REGISTRATION(SmodelsParserTest);
+CPPUNIT_TEST_SUITE_REGISTRATION(ClaspParserTest);
 CPPUNIT_TEST_SUITE_REGISTRATION(DimacsParserTest);
 CPPUNIT_TEST_SUITE_REGISTRATION(OPBParserTest);
 

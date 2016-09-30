@@ -29,34 +29,40 @@
 // Compute the stable models of the program
 //    a :- not b.
 //    b :- not a.
-void example1() {
+void example1(bool basicSolve) {
 	// LogicProgram provides the interface for 
 	// defining logic programs.
 	// It also preprocesses the program and converts it
 	// to the internal solver format.
 	// See logic_program.h for details.
 	Clasp::Asp::LogicProgram lp;
+	Potassco::RuleBuilder rb;
 	
 	// Among other things, SharedContext maintains a Solver object 
 	// which hosts the data and functions for CDNL answer set solving.
-	// SharedContext also contains the symbol table which stores the 
-	// mapping between atoms of the logic program and the 
-	// propositional literals in the solver.
 	// See shared_context.h for details.
 	Clasp::SharedContext ctx;
 	
 	// startProgram must be called once before we can add atoms/rules
 	lp.startProgram(ctx);
 	
-	// Populate symbol table. Each atoms must have a unique id, the name is optional.
-	// The symbol table then maps the ids to the propositional 
-	// literals in the solver.
-	lp.setAtomName(1, "a");
-	lp.setAtomName(2, "b");
-	
 	// Define the rules of the program.
-	lp.startRule(Clasp::Asp::BASICRULE).addHead(1).addToBody(2, false).endRule();
-	lp.startRule(Clasp::Asp::BASICRULE).addHead(2).addToBody(1, false).endRule();
+	Potassco::Atom_t a = lp.newAtom();
+	Potassco::Atom_t b = lp.newAtom();
+	lp.addRule(rb.start().addHead(a).addGoal(Potassco::neg(b)));
+	lp.addRule(rb.start().addHead(b).addGoal(Potassco::neg(a)));
+
+	// Populate output table. 
+	// The output table defines what is printed for a literal 
+	// that is part of an answer set.
+	lp.addOutput("a", a);
+	lp.addOutput("b", b);
+	// It is not limited to atoms. For example, the following
+	// statement results in the ouput "~b" whenever b is not
+	// in a stable model.
+	lp.addOutput("~b", Potassco::neg(b));
+	// And we always want to have "eureka"...
+	lp.addOutput("eureka", Potassco::toSpan<Potassco::Lit_t>());
 	
 	// Once all rules are defined, call endProgram() to load the (simplified)
 	// program into the context object.
@@ -66,25 +72,51 @@ void example1() {
 	// answer set, we need an enumerator.
 	// See enumerator.h for details
 	Clasp::ModelEnumerator enumerator;
-	enumerator.init(ctx, 0);
+	enumerator.init(ctx);
 
 	// We are done with problem setup. 
 	// Prepare for solving.
 	ctx.endInit();
-	// BasicSolve implements a basic search for a model.
-	// It handles the various strategies like restarts, deletion, etc.
-	Clasp::BasicSolve solve(*ctx.master());
-	// Prepare the solver for enumeration.
-	enumerator.start(solve.solver());
-	while (solve.solve() == Clasp::value_true) {
-		// Make the enumerator aware of the new model and
-		// let it compute a new constraint and/or backtracking level.
-		if (enumerator.commitModel(solve.solver())) { printModel(ctx.symbolTable(), enumerator.lastModel()); }
-		// Integrate the model into the search and thereby prepare 
-		// the solver for the search for the next model.
-		enumerator.update(solve.solver());
+
+	if (basicSolve) {
+		std::cout << "With Clasp::BasicSolve" << std::endl;
+		// BasicSolve implements a basic search for a model.
+		// It handles the various strategies like restarts, deletion, etc.
+		Clasp::BasicSolve solve(*ctx.master());
+		// Prepare the solver for enumeration.
+		enumerator.start(solve.solver());
+		while (solve.solve() == Clasp::value_true) {
+			// Make the enumerator aware of the new model and
+			// let it compute a new constraint and/or backtracking level.
+			if (enumerator.commitModel(solve.solver())) { printModel(ctx.output, enumerator.lastModel()); }
+			// Integrate the model into the search and thereby prepare 
+			// the solver for the search for the next model.
+			enumerator.update(solve.solver());
+		}
+		std::cout << "No more models!" << std::endl;
 	}
-	std::cout << "No more models!" << std::endl;
+	else {
+		std::cout << "With Clasp::SequentialSolve" << std::endl;
+		// SequentialSolve combines a BasicSolve object,
+		// which implements search for a model and handles
+		// various strategies like restarts, deletion, etc.,
+		// with an enumerator to provide more complex reasoning,
+		// like enumeration or optimization.
+		Clasp::SequentialSolve solve;
+		solve.setEnumerator(enumerator);
+		// Start the solve algorithm and prepare solver for enumeration.
+		solve.start(ctx);
+		// Extract and print models one by one.
+		while (solve.next()) {
+			printModel(ctx.output, solve.model());
+		}
+		if (!solve.more()) {
+			std::cout << "No more models!" << std::endl;
+		}
+	}
 }
 
-
+void example1() {
+	example1(true);
+	example1(false);
+}

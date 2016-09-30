@@ -1,5 +1,5 @@
 // 
-// Copyright (c) 2010-2012, Benjamin Kaufmann
+// Copyright (c) 2010-2015, Benjamin Kaufmann
 // 
 // This file is part of Clasp. See http://www.cs.uni-potsdam.de/clasp/ 
 // 
@@ -19,15 +19,16 @@
 //
 #ifndef CLASP_MINIMIZE_CONSTRAINT_H_INCLUDED
 #define CLASP_MINIMIZE_CONSTRAINT_H_INCLUDED
-
 #ifdef _MSC_VER
-#pragma warning (disable : 4200) // nonstandard extension used : zero-sized array
 #pragma once
 #endif
-
+/*!
+* \file
+* \brief Types and functions for implementing minimization constraints.
+*/
 #include <clasp/constraint.h>
 #include <clasp/util/atomic.h>
-#include <clasp/util/misc_types.h>
+#include <clasp/solver_strategies.h>
 #include <cassert>
 
 namespace Clasp {
@@ -35,7 +36,8 @@ class MinimizeConstraint;
 class WeightConstraint;
 
 //! Supported minimization modes.
-/*! 
+/*!
+ * \ingroup constraint
  * Defines the possible minimization modes used during solving.
  * If optimize is used, a valid candidate model is a solution that is
  * strictly smaller than all previous solutions. Otherwise,
@@ -43,32 +45,34 @@ class WeightConstraint;
  */
 struct MinimizeMode_t {
 	enum Mode {
-		ignore    = 0, /**< Ignore optimize statements during solving. */
-		optimize  = 1, /**< Optimize via a decreasing bound. */
-		enumerate = 2, /**< Enumerate models with cost less or equal to a fixed bound. */
-		enumOpt   = 3, /**< Enumerate models with cost equal to optimum. */
+		ignore    = 0, //!< Ignore optimize statements during solving.
+		optimize  = 1, //!< Optimize via a decreasing bound.
+		enumerate = 2, //!< Enumerate models with cost less or equal to a fixed bound.
+		enumOpt   = 3, //!< Enumerate models with cost equal to optimum.
 	};
 	//! Strategy to use when optimization is active.
 	enum Strategy {
-		opt_bb = 0, /*!< branch and bound based optimization.   */
-		opt_usc= 1, /*!< unsatisfiable-core based optimization. */
+		opt_bb = 0, //!< Branch and bound based optimization.
+		opt_usc= 1, //!< Unsatisfiable-core based optimization.
 	};
 	//! Options for branch and bound based optimization.
 	enum BBOption {
-		bb_step_def  = 0u, /*!< branch and bound with fixed step of size 1. */
-		bb_step_hier = 1u, /*!< hierarchical branch and bound. */
-		bb_step_inc  = 2u, /*!< hierarchical branch and bound with increasing steps. */
-		bb_step_dec  = 3u, /*!< hierarchical branch and bound with decreasing steps. */
+		bb_step_def  = 0u, //!< Branch and bound with fixed step of size 1.
+		bb_step_hier = 1u, //!< Hierarchical branch and bound.
+		bb_step_inc  = 2u, //!< Hierarchical branch and bound with increasing steps.
+		bb_step_dec  = 3u, //!< Hierarchical branch and bound with decreasing steps.
 	};
 	//! Options for unsatisfiable-core based optimization.
 	enum UscOption {
-		usc_preprocess = 1u, /*!< enable (disjoint) preprocessing. */
-		usc_imp_only   = 2u, /*!< only add constraints for one direction (instead of eq). */
-		usc_clauses    = 4u, /*!< only add clauses (instead of cardinality constraints).  */
+		usc_preprocess = 1u, //!< Enable (disjoint) preprocessing.
+		usc_imp_only   = 2u, //!< Only add constraints for one direction (instead of eq).
+		usc_clauses    = 4u, //!< Only add clauses (instead of cardinality constraints).
+		usc_stratify   = 8u, //!< Use stratified heuristic for weighted optimization.
 	};
+	//! Heuristic options common to all optimization strategies.
 	enum Heuristic {
-		heu_sign  = 1,  /*!< Use optimize statements in sign heuristic. */ 
-		heu_model = 2,  /*!< Apply model heuristic when optimizing.     */
+		heu_sign  = 1,  //!< Use optimize statements in sign heuristic.
+		heu_model = 2,  //!< Apply model heuristic when optimizing.
 	};
 	static bool supportsSplitting(Strategy s) { return s != opt_usc; }
 };
@@ -76,7 +80,7 @@ typedef MinimizeMode_t::Mode MinimizeMode;
 
 //! A type holding data (possibly) shared between a set of minimize constraints.
 /*!
- * \ingroup shared
+ * \ingroup shared_con
  */
 class SharedMinimizeData {
 public:
@@ -84,17 +88,18 @@ public:
 	//! A type to represent a weight at a certain level.
 	/*!
 	 * Objects of this type are used to create sparse vectors of weights. E.g.
-	 * a weight vector (w1@L1, w2@L3, w3@L5) is represented as [<L1,1,w1><L3,1,w2><L5,0,w3>], 
-	 * where each <level, next, weight>-tuple is an object of type LevelWeight.
+	 * a weight vector (w1\@L1, w2\@L3, w3\@L5) is represented as \[\<L1,1,w1\>\<L3,1,w2\>\<L5,0,w3\>\], 
+	 * where each \<level, next, weight\>-tuple is an object of type LevelWeight.
 	 */
 	struct LevelWeight {
 		LevelWeight(uint32 l, weight_t w) : level(l), next(0), weight(w) {}
-		uint32   level : 31; /**< The level of this weight. */
-		uint32   next  :  1; /**< Does this weight belong to a sparse vector of weights? */
-		weight_t weight;     /**< The weight at this level. */
+		uint32   level : 31; //!< The level of this weight.
+		uint32   next  :  1; //!< Does this weight belong to a sparse vector of weights?
+		weight_t weight;     //!< The weight at this level.
 	};
 	//! A type for holding sparse vectors of level weights of a multi-level constraint.
 	typedef PodVector<LevelWeight>::type WeightVec;
+	typedef PodVector<weight_t>::type    PrioVec;
 	explicit SharedMinimizeData(const SumVec& lhsAdjust, MinimizeMode m = MinimizeMode_t::optimize);
 	//! Increases the reference count of this object.
 	ThisType*      share()               { ++count_; return this; }
@@ -109,8 +114,7 @@ public:
 	//! Returns true if optimization is active.
 	bool           optimize()       const{ return optGen_ ? checkNext() : mode_ != MinimizeMode_t::enumerate; }
 	//! Returns the lower bound of level x.
-	wsum_t         lower(uint32 x)  const{ return lower_[x]; }
-	const wsum_t*  lower()          const{ return &lower_[0]; }
+	wsum_t         lower(uint32 x)  const;
 	//! Returns the upper bound of level x.
 	wsum_t         upper(uint32 x)  const{ return upper()[x]; }
 	const wsum_t*  upper()          const{ return &(up_ + (gCount_ & 1u))->front(); }
@@ -121,7 +125,7 @@ public:
 	wsum_t         adjust(uint32 x) const{ return adjust_[x]; }
 	const wsum_t*  adjust()         const{ return &adjust_[0]; }
 	//! Returns the current (ajusted and possibly tentative) optimum for level x.
-	wsum_t         optimum(uint32 x)const{ return adjust(x) + sum(x); }
+	wsum_t         optimum(uint32 x)const;
 	//! Returns the highest level of the literal with the given index i.
 	uint32         level(uint32 i)  const{ return numRules() == 1 ? 0 : weights[lits[i].second].level; }
 	//! Returns the most important weight of the literal with the given index i.
@@ -131,7 +135,7 @@ public:
 	bool           checkNext()      const{ return mode() != MinimizeMode_t::enumerate && generation() != optGen_; }
 	/*!
 	 * \name interface for optimization
-	 * The following functions shall not be called concurrently.
+	 * If not otherwise specified, the following functions shall not be called concurrently.
 	 */
 	//@{
 	
@@ -146,6 +150,7 @@ public:
 	
 	//! Attaches a new minimize constraint to this data object.
 	/*!
+	 * \param s      Solver in which the new minimize constraint should apply.
 	 * \param strat  The optimization strategy to use (see MinimizeMode_t::Strategy).
 	 * \param param  Parameter to pass to the optimization strategy.
 	 * \param addRef If true, the ref count of the shared object is increased. 
@@ -158,14 +163,19 @@ public:
 	 * \pre opt is a pointer to an array of size numRules()
 	 */
 	const SumVec* setOptimum(const wsum_t* opt);
-	//! Sets the lower bound of level lev to low.
-	void          setLower(uint32 lev, wsum_t low);
 	//! Marks the current tentative optimum as the final optimum.
 	/*!
 	 * \note Once a final optimum is set, further calls to setOptimum()
 	 * are ignored until resetBounds() is called.
 	 */
 	void          markOptimal();
+	//! Sets the lower bound of level lev to low.
+	void          setLower(uint32 lev, wsum_t low);
+	//! Sets the lower bound of level lev to the maximum of low and the existing value lower(lev).
+	/*!
+	 * \note This function is thread-safe, i.e., can be called safely from multiple threads.
+	 */
+	wsum_t        incLower(uint32 lev, wsum_t low);
 	//@}
 
 	/*!
@@ -192,84 +202,76 @@ public:
 	}
 	//@}
 private:
-	typedef Clasp::atomic<uint32> Atomic;
+	typedef Clasp::Atomic_t<uint32>::type CounterType;
+	typedef Clasp::Atomic_t<wsum_t>::type LowerType;
 	SumVec       adjust_;  // initial bound adjustments
-	SumVec       lower_;   // (unadjusted) lower bound of constraint
 	SumVec       up_[2];   // buffers for update via "double buffering"
+	LowerType*   lower_;   // (unadjusted) lower bound of constraint
 	MinimizeMode mode_;    // how to compare assignments?
-	Atomic       count_;   // number of refs to this object
-	Atomic       gCount_;  // generation count - used when updating optimum
+	CounterType  count_;   // number of refs to this object
+	CounterType  gCount_;  // generation count - used when updating optimum
 	uint32       optGen_;  // generation of optimal bound
 public:
 	WeightVec     weights; // sparse vectors of weights - only used for multi-level constraints
-	WeightLiteral lits[0]; // (shared) literals - terminated with posLit(0)
+	PrioVec       prios;   // (optional): maps levels to original priorities
+CLASP_WARNING_BEGIN_RELAXED
+	WeightLiteral lits[0]; // (shared) literals - terminated with lit_true()
+CLASP_WARNING_END_RELAXED
 private: 
 	~SharedMinimizeData();
 	void destroy() const;
 	SharedMinimizeData(const SharedMinimizeData&);
 	SharedMinimizeData& operator=(const SharedMinimizeData&);
 };
-
 //! Helper class for creating minimize constraints.
+/*!
+ * \ingroup constraint
+ */
 class MinimizeBuilder {
 public:
 	typedef SharedMinimizeData SharedData;
 	MinimizeBuilder();
-	~MinimizeBuilder();
-	
-	bool             hasRules() const { return !adjust_.empty(); }
-	uint32           numRules() const { return (uint32)adjust_.size(); }
-	uint32           numLits()  const { return (uint32)lits_.size(); }
-	//! Adds a minimize statement.
-	/*!
-	 * \param lits the literals of the minimize statement
-	 * \param adjustSum the initial sum of the minimize statement
-	 */
-	MinimizeBuilder& addRule(const WeightLitVec& lits, wsum_t adjustSum = 0);
-	MinimizeBuilder& addLit(uint32 lev, WeightLiteral lit);
-	
-	//! Creates a new data object from previously added minimize statements.
+
+	MinimizeBuilder& add(weight_t prio, const WeightLitVec& lits);
+	MinimizeBuilder& add(weight_t prio, WeightLiteral lit);
+	MinimizeBuilder& add(weight_t prio, weight_t adjust);
+	MinimizeBuilder& add(const SharedData& minCon);
+
+	bool empty() const;
+
+	//! Creates a new data object from previously added minimize literals.
 	/*!
 	 * The function creates a new minimize data object from 
-	 * the previously added minimize statements. The returned
+	 * the previously added literals to minimize. The returned
 	 * object can be used to attach one or more MinimizeConstraints.
-	 * \param ctx A ctx object used to simplify minimize statements.
-	 * \return a new data object representing previously added minimize statements
-	 *  or 0 if minimize statements are initially inconsistent!
+	 * \param ctx A ctx object to be associated with the new minmize constraint.
+	 * \return A data object representing previously added minimize statements or 0 if empty().
+	 * \pre ctx.ok() and !ctx.frozen()
+	 * \post empty()
 	 */
-	SharedData*      build(SharedContext& ctx);
+	SharedData* build(SharedContext& ctx);
+	
+	//! Discards any previously added minimize literals.
 	void clear();
 private:
-	struct Weight {
-		Weight(uint32 lev, weight_t w) : level(lev), weight(w), next(0) {}
-		uint32   level;
+	struct MLit {
+		MLit(const WeightLiteral& wl, weight_t at) : lit(wl.first), prio(at), weight(wl.second) {}
+		Literal  lit;
+		weight_t prio;
 		weight_t weight;
-		Weight*  next;
-		static void free(Weight*& w);
 	};
-	typedef std::pair<Literal, Weight*> LitRep;
-	typedef PodVector<LitRep>::type     LitRepVec;
-	struct CmpByLit {
-		bool operator()(const LitRep& lhs, const LitRep& rhs) const;
+	struct CmpPrio  { bool operator()(const MLit& lhs, const MLit& rhs) const; };
+	struct CmpLit   { bool operator()(const MLit& lhs, const MLit& rhs) const; };
+	struct CmpWeight{
+		CmpWeight(const SharedData::WeightVec* w) : weights(w) {}
+		bool operator()(const MLit& lhs, const MLit& rhs) const;
+		const SharedData::WeightVec* weights;
 	};
-	struct CmpByWeight {
-		bool operator()(const LitRep& lhs, const LitRep& rhs) const;
-		int  compare   (const LitRep& lhs, const LitRep& rhs) const;
-	};
-	void     unfreeze();
-	bool     prepare(SharedContext& ctx);
-	void     addTo(LitRep l, SumVec& vec);
-	void     mergeReduceWeight(LitRep& x, LitRep& by);
-	weight_t addFlattened(SharedData::WeightVec& x, const Weight& w);
-	bool     eqWeight(const SharedData::LevelWeight* lhs, const Weight& rhs);
-	weight_t addLitImpl(uint32 lev, WeightLiteral lit) {
-		if (lit.second > 0) { lits_.push_back(LitRep(lit.first, new Weight(lev, lit.second)));   return 0; }
-		if (lit.second < 0) { lits_.push_back(LitRep(~lit.first, new Weight(lev, -lit.second))); return lit.second; }
-		return 0;
-	}
-	LitRepVec lits_;  // all literals
-	SumVec    adjust_;// lhs adjustments
-	bool      ready_; // prepare was called
+	typedef PodVector<MLit>::type LitVec;
+	void prepareLevels(const Solver& s, SumVec& adjustOut, WeightVec& priosOut);
+	void mergeLevels(SumVec& adjust, SharedData::WeightVec& weightsOut);
+	SharedData* createShared(SharedContext& ctx, const SumVec& adjust, const CmpWeight& cmp);
+	LitVec lits_;
 };
 
 //! Base class for implementing (mulit-level) minimize statements.
@@ -296,8 +298,8 @@ private:
  */
 class MinimizeConstraint : public Constraint {
 public:
-	typedef SharedMinimizeData       SharedData;
-	typedef const SharedData*        SharedDataP;
+	typedef SharedMinimizeData SharedData;
+	typedef const SharedData*  SharedDataP;
 	//! Returns a pointer to the shared representation of this constraint.
 	SharedDataP shared()  const { return shared_; }	
 	//! Attaches this object to the given solver.
@@ -324,6 +326,7 @@ public:
 protected:
 	MinimizeConstraint(SharedData* s);
 	~MinimizeConstraint();
+	void reportLower(Solver& s, uint32 level, wsum_t low) const;
 	bool prepare(Solver& s, bool useTag);
 	SharedData* shared_; // common shared data
 	Literal     tag_;    // (optional) literal for tagging reasons
@@ -331,6 +334,7 @@ protected:
 
 //! Minimization via branch and bound.
 /*!
+ * \ingroup constraint
  * The class supports both basic branch and bound as well as
  * hierarchical branch and bound (with or without varying step sizes).
  */
@@ -397,7 +401,7 @@ public:
 	 * called in order to continue optimization.
 	 * \return false if search-space is exceeded w.r.t this constraint.
 	 */
-	bool       commitLowerBound(const Solver& s, bool upShared);
+	bool       commitLowerBound(Solver& s, bool upShared);
 	
 	//! Removes the local upper bound of this constraint and therefore disables it.
 	/*!
@@ -446,6 +450,9 @@ private:
 };
 
 //! Minimization via unsat cores.
+/*!
+ * \ingroup constraint
+ */
 class UncoreMinimize : public MinimizeConstraint {
 public:
 	// constraint interface
@@ -503,18 +510,19 @@ private:
 	Core&    getCore(const LitData& x)       { return open_[x.coreId-1]; }
 	LitData& addLit(Literal p, weight_t w);
 	void     releaseLits();
-	bool     addCore(Solver& s, const LitPair* lits, uint32 size, weight_t weight);
-	bool     addCore(Solver& s, const WCTemp& wc, weight_t w);
-	bool     addClauses(Solver& s, const LitPair* lits, uint32 size, weight_t weight);
-	bool     closeCore(Solver& s, LitData& x, bool sat);
+	bool     addCore(Solver& s, const LitPair* lits, uint32 size, weight_t w);
 	uint32   allocCore(WeightConstraint* con, weight_t bound, weight_t weight, bool open);
+	bool     closeCore(Solver& s, LitData& x, bool sat);
+	bool     addOll(Solver& s, const LitPair* lits, uint32 size, weight_t w);
+	bool     addOllCon(Solver& s, const WCTemp& wc, weight_t w);
 	enum CompType { comp_disj = 0, comp_conj = 1 };
-	bool     add(CompType t, Solver& s, Literal head, Literal body1, Literal body2);
+	bool     addPmr(Solver& s, const LitPair* lits, uint32 size, weight_t w);
+	bool     addPmrCon(CompType t, Solver& s, Literal head, Literal body1, Literal body2);
 	// algorithm
 	void     init();
 	uint32   initRoot(Solver& s);
 	bool     initLevel(Solver& s);
-	uint32   analyze(Solver& s, LitVec& cfl, weight_t& minW, LitVec& poppedOther);
+	uint32   analyze(Solver& s, weight_t& minW, LitVec& poppedOther);
 	bool     pushPath(Solver& s);
 	void     integrateOpt(Solver& s);
 	bool     popPath(Solver& s, uint32 dl, LitVec& out);
@@ -536,7 +544,7 @@ private:
 	LitSet    assume_;    // current set of assumptions
 	LitSet    todo_;      // core(s) not yet represented as constraint
 	LitVec    fix_;       // set of fixed literals
-	LitVec    conflict_;  // current conflict
+	LitVec    conflict_;  // temporary: conficting set of assumptions
 	WCTemp    temp_;      // temporary: used for creating weight constraints
 	wsum_t    lower_;     // lower bound of active level
 	wsum_t    upper_;     // upper bound of active level
@@ -550,6 +558,8 @@ private:
 	uint32    path_  :  1;// push path?
 	uint32    next_  :  1;// assume next level?
 	uint32    init_  :  1;// init constraint?
+	weight_t  actW_;      // active weight limit (only weighted minimization with preprocessing)
+	weight_t  nextW_;     // next weight limit   (only weighted minimization with preprocessing)
 	uint32    eRoot_;     // saved root level of solver (initial gp)
 	uint32    aTop_;      // saved assumption level (added by us)
 	uint32    freeOpen_;  // head of open core free list

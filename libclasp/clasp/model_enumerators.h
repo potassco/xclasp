@@ -17,6 +17,8 @@
 // along with Clasp; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
+//! \file
+//! \brief Model enumeration with minimization and projection.
 #ifndef CLASP_MODEL_ENUMERATORS_H
 #define CLASP_MODEL_ENUMERATORS_H
 
@@ -32,7 +34,7 @@ namespace Clasp {
 //! Class for model enumeration with minimization and projection.
 /*!
  * This class implements algorithms for enumerating models with or without optimization
- * and/or projection. It supports two different algorithms (strategies), first, enumeration
+ * and/or projection. It supports two different algorithms (strategies). First, enumeration
  * via restricted backjumping, and second, enumeration via recording of solution nogoods.
  *
  * The first strategy, strategy_backtrack, maintains a special backtracking level to
@@ -60,32 +62,34 @@ class ModelEnumerator : public Enumerator {
 public:
 	//! Enumeration algorithms.
 	enum Strategy {
-		strategy_auto      = 0, /*!< Use strategy best suited to problem. */
-		strategy_backtrack = 1, /*!< Use backtrack-based enumeration.     */
-		strategy_record    = 2  /*!< Use nogood-based enumeration.        */
+		strategy_auto      = 0, //!< Use strategy best suited to problem.
+		strategy_backtrack = 1, //!< Use backtrack-based enumeration.
+		strategy_record    = 2  //!< Use nogood-based enumeration.
 	};
 	//! Projective solution enumeration and options.
 	enum ProjectOptions {
-		project_enable_simple = 1, /*!< Enable projective solution enumeration. */
-		project_use_heuristic = 2, /*!< Use heuristic when selecting a literal from a projection nogood. */
-		project_save_progress = 4, /*!< Enable progress saving after the first solution was found. */
-		project_enable_full   = 6, /*!< Enable projective solution enumeration with heuristic and progress saving. */
-		project_dom_lits      = 8, /*!< In strategy record, project only on true domain literals. */ 
+		project_enable_simple = 1, //!< Enable projective solution enumeration.
+		project_use_heuristic = 2, //!< Use heuristic when selecting a literal from a projection nogood.
+		project_save_progress = 4, //!< Enable progress saving after the first solution was found.
+		project_enable_full   = 6, //!< Enable projective solution enumeration with heuristic and progress saving.
+		project_dom_lits      = 8, //!< In strategy record, project only on true domain literals.
 	};
 	/*! 
-	 * \param p The printer to use for outputting results.
+	 * \param st Enumeration strategy to apply.
 	 */
 	explicit ModelEnumerator(Strategy st = strategy_auto);
 	~ModelEnumerator();
 	
 	//! Configure strategy.
 	/*!
-	 * \params st         Enumeration algorithm to use. 
-	 * \params projection The set of ProjectOptions to be applied or 0 to disable projective enumeration.
+	 * \param st         Enumeration strategy to use. 
+	 * \param projection The set of ProjectOptions to be applied or 0 to disable projective enumeration.
+	 * \param filter     Ignore output predicates starting with filter in projective enumeration.
 	 */
-	void     setStrategy(Strategy st = strategy_auto, uint32 projection = 0);
-	bool     projectionEnabled()const { return project_.get() != 0; }
+	void     setStrategy(Strategy st = strategy_auto, uint32 projection = 0, char filter = '_');
+	bool     projectionEnabled()const { return projectOpts() != 0; }
 	Strategy strategy()         const { return static_cast<Strategy>(options_ & 3u); }
+	bool     project(Var v)     const;
 protected:
 	bool   supportsRestarts() const { return optimize() || strategy() == strategy_record; }
 	bool   supportsParallel() const { return !projectionEnabled() || strategy() != strategy_backtrack; }
@@ -98,16 +102,15 @@ private:
 	class ModelFinder;
 	class BacktrackFinder;
 	class RecordFinder;
-	typedef SingleOwnerPtr<VarVec> VecPtr;
+	typedef PodVector<uint32>::type WordVec;
 	void    initProjection(SharedContext& ctx);
-	void    addProjectVar(SharedContext& ctx, Var v, bool mark);
-	uint32  numProjectionVars() const { return (uint32)project_->size(); }
-	Var     projectVar(uint32 i)const { return (*project_)[i]; }
-	uint32  projectOpts()       const { return options_ >> 4; }
-	bool    detectStrategy()    const { return (options_ & detect_strategy_flag) == detect_strategy_flag; }
-	bool    trivial()           const { return (options_ & trivial_flag) == trivial_flag; }
-	VecPtr project_;
-	uint32 options_;
+	void    addProject(SharedContext& ctx, Var v);
+	uint32  projectOpts()    const { return (options_ >> 4) & strategy_opts_mask; }
+	bool    detectStrategy() const { return (options_ & detect_strategy_flag) == detect_strategy_flag; }
+	bool    trivial()        const { return (options_ & trivial_flag) == trivial_flag; }
+	LitVec  domRec_;
+	uint32  options_;
+	WordVec project_;
 };
 
 }

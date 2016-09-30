@@ -29,7 +29,7 @@
 #@1:enum-mode {bt, record, auto}[auto] # ASP
 @1:0:opt-strategy {bb,usc} [bb]
 @1:1:BB:opt-strategy {0,1,2,3}[0]
-@1:1:USC:opt-strategy [0,7][1]i
+@1:1:USC:opt-strategy [0,15][1]i
 @1:opt-heuristic {0,1,2,3}[0]  #
 @1:F:restart-on-model {yes,no}[no]
 @1:reset-restarts {0,1,2}[0]    
@@ -38,14 +38,21 @@
 @1:1:vsids:heuristic {75,85,92,93,94,95,96,97,98,99}[95] # Conditional - heuristic=vsids
 @1:1:vmtf:heuristic [1,128][8]il                         # Conditional - heuristic=vmtf
 @1:1:berk:heuristic {0,128,256,512,1024,2048}[0]         # Conditional - heuristic=berkmin
+@1:S:vsids-progress {yes,no}[no]
+@1:No:vsids-progress {no}[no]
+@1:1:vsids-progress [80,95][80]i                         # Conditional - heuristic=vsids
+@1:2:vsids-progress [1,15][1]i
+@1:3:vsids-progress [100,30000][5000]il
 @1:F:init-moms {yes,no}[no]
-@1:sign-def {0,1,2,4}[1]       # 3 random excluded (4 only for disjunctive ASP)
+@1:F:nant {yes,no}[no]
+@1:sign-def {0,1,2}[1]         # 3 random excluded
 @1:F:sign-fix {yes,no}[no]
 @1:score-other {0,1,2}[1]      # only for ASP
 @1:score-res {1,2,3}[2]        # Conditional - only for lookback heuristics
 @1:F:berk-huang {yes,no}[no]   # Conditional - heuristic=berkmin
-@1:0:dom-mod {1,3,5}[1]       # Conditional - heuristic=Domain
-@1:1:dom-mod {0,1,24}[0]      # Conditional - heuristic=Domain  
+@1:F:vsids-acids {yes,no}[no]  # Conditional - heuristic=vsids|doman
+@1:0:dom-mod [0,7][1]i        # Conditional - heuristic=Domain
+@1:1:dom-mod {0,1,8,24}[0]    # Conditional - heuristic=Domain  
 @1:save-progress[0,180][180]i   
 @1:init-watches {0,2}[2]       # 1: random excluded
 @1:1:lookahead {atom,body,hybrid,no}[no]  
@@ -71,6 +78,9 @@
 @1:S:counterCond {yes,no} [yes]    
 @1:counter-restarts [1,127][3]il      # Conditional
 @1:counter-bump [10,4096][10]il       # Conditional
+@1:0:block-restarts {0,1000,2000,5000,7500,10000}[0]
+@1:1:block-restarts {1.2,1.4,1.6,1.8,2.0}[1.4]
+@1:2:block-restarts {0,5000,10000}[0]
 # --- DELETION
 @1:S:deletion {yes,no}[yes]
 @1:deletion {no}[no]
@@ -85,6 +95,7 @@
 @1:del-on-restart [0,50][0]i
 @1:1:del-glue [0,8][2]i
 @1:2:del-glue {0,1}[0]
+@1:del-protect [0,30][0]i
 @1:0:del-cfl {F,L,x,+,no}[no]
 @1:1:del-cfl [1,65535][128]il         # first schedule arg
 @1:2:G:del-cfl [1.0,2.0][1.5]         # second arg if x
@@ -103,6 +114,7 @@
 # --- MISC    
 @1:0:strengthen {local,recursive,no}[local] # Conditional
 @1:1:strengthen {0,1,2}[0]
+@1:2:strengthen {0,1}[0]
 @1:otfs {0,1,2}[2]
 @1:update-lbd {0,1,2,3}[0]        
 @1:F:update-act {yes,no}[no]      
@@ -123,17 +135,23 @@
 @0:eq | @0:S:eqCond in {yes}
 @0:F:eq-dfs | @0:S:eqCond in {yes}
 # heuristic conds
-@1:F:berk-huang|@1:0:heuristic in {Berkmin}
-@1:score-res |@1:0:heuristic in {Berkmin,Vmtf,Vsids,Domain}
-@1:0:dom-mod |@1:0:heuristic in {Domain}
-@1:1:dom-mod |@1:0:heuristic in {Domain}
+@1:F:berk-huang | @1:0:heuristic in {Berkmin}
+@1:F:vsids-acids | @1:0:heuristic in {Vsids,Domain}
+@1:score-res | @1:0:heuristic in {Berkmin,Vmtf,Vsids,Domain}
+@1:0:dom-mod | @1:0:heuristic in {Domain}
+@1:1:dom-mod | @1:0:heuristic in {Domain}
 @1:1:vsids:heuristic | @1:0:heuristic in {Vsids,Domain}
 @1:1:vmtf:heuristic  | @1:0:heuristic in {Vmtf}
 @1:1:berk:heuristic  | @1:0:heuristic in {Berkmin}
+@1:S:vsids-progress  | @1:0:heuristic in {Vsids,Domain}
+@1:No:vsids-progress | @1:S:vsids-progress in {no}
+@1:1:vsids-progress  | @1:S:vsids-progress in {yes}
+@1:2:vsids-progress  | @1:S:vsids-progress in {yes}
+@1:3:vsids-progress  | @1:S:vsids-progress in {yes}
 @1:2:lookahead | @1:1:lookahead in {atom,body,hybrid}
 # opt conds
-@1:1:BB:opt-strategy | @1:0:opt-strategy in {bb}
-@1:1:USC:opt-strategy| @1:0:opt-strategy in {usc}
+@1:1:BB:opt-strategy  | @1:0:opt-strategy in {bb}
+@1:1:USC:opt-strategy | @1:0:opt-strategy in {usc}
 # lookback conds
 #... |@1:F:no-lookback in {no}
 # restarts conds
@@ -158,6 +176,8 @@
 @1:counter-bump | @1:S:counterCond in {yes}
 @1:counter-restarts | @1:0:restarts in {F,D,L,x,+}
 @1:counter-bump | @1:0:restarts in {F,D,L,x,+}
+@1:1:block-restarts | @1:0:block-restarts in {1000,2000,5000,7500,10000}
+@1:2:block-restarts | @1:0:block-restarts in {1000,2000,5000,7500,10000} 
 # deletion
 @1:deletion       | @1:S:deletion in {no}
 @1:1:deletion     | @1:S:deletion in {yes}
@@ -166,6 +186,7 @@
 @1:1:del-init     | @1:S:deletion in {yes}
 @1:2:del-init     | @1:S:deletion in {yes}
 @1:3:del-init     | @1:S:deletion in {yes}
+@1:del-protect    | @1:update-lbd in {1,2,3}
 @1:del-max        | @1:S:deletion in {yes}
 @1:del-estimate   | @1:S:deletion in {yes}
 @1:del-on-restart | @1:S:deletion in {yes}
@@ -189,6 +210,7 @@
 {@1:S:deletion=no, @1:S:del-grow=yes}
 # misc
 @1:1:strengthen | @1:0:strengthen in {local,recursive}
+@1:2:strengthen | @1:0:strengthen in {local,recursive}
 @1:contraction | @1:S:contraction in {yes}
 @1:No:contraction | @1:S:contraction in {no}
 #Forbidden:

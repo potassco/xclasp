@@ -1,7 +1,7 @@
 /*!
 \mainpage The clasp System
 \author Benjamin Kaufmann (kaufmann@cs.uni-potsdam.de)
-\version 1.0
+\version 3.2
 
 clasp - the <b>c</b>onflict-driven <b>l</b>earning <b>a</b>nswer <b>s</b>et <b>p</b>rogramming system -
 is an answer set solver for (extended) normal logic programs. It combines the high-level modeling capacities 
@@ -26,5 +26,17 @@ Such techniques include:
  - dedicated propagation of binary and ternary nogoods
  .
 
-For more information please visit the clasp homepage: http://www.cs.uni-potsdam.de/clasp 
+For more information please visit the clasp homepage: http://www.cs.uni-potsdam.de/clasp
+
+  @defgroup facade Facade
+  @defgroup cli Cli
+  @defgroup clingo Clingo 
+  @defgroup problem Input
+  @defgroup constraint Constraints
+  @defgroup shared SharedContext
+  @defgroup solver Solver
+  @defgroup heuristic Decision Heuristics
+  @defgroup enumerator Solving
 */
+
+

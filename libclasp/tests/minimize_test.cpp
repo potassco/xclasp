@@ -17,6 +17,9 @@
 // along with Clasp; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
+#ifdef _MSC_VER
+#pragma warning (disable : 4996) // std::equal may be unsafe
+#endif
 #include "test.h"
 #include <algorithm>
 #include <clasp/minimize_constraint.h>
@@ -26,11 +29,14 @@ namespace Clasp { namespace Test {
 class DefaultMinimizeTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST_SUITE(DefaultMinimizeTest);
 	CPPUNIT_TEST(testEmpty);
+	CPPUNIT_TEST(testEmptyMultiLevel);
 	CPPUNIT_TEST(testOneLevelLits);
 	CPPUNIT_TEST(testMultiLevelLits);
 	CPPUNIT_TEST(testMultiLevelWeightsAreReused);
 	CPPUNIT_TEST(testMergeComplementaryLits);
 	CPPUNIT_TEST(testMergeComplementaryLits2);
+	CPPUNIT_TEST(testMergeComplementaryLits3);
+	CPPUNIT_TEST(testInitFromOther);
 	CPPUNIT_TEST(testNegativeLowerInit);
 	CPPUNIT_TEST(testNegativeLower);
 
@@ -68,14 +74,14 @@ class DefaultMinimizeTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST_SUITE_END(); 
 public:
 	DefaultMinimizeTest() {
-		a = posLit(ctx.addVar(Var_t::atom_var));
-		b = posLit(ctx.addVar(Var_t::atom_var));
-		c = posLit(ctx.addVar(Var_t::atom_var));
-		d = posLit(ctx.addVar(Var_t::atom_var));
-		e = posLit(ctx.addVar(Var_t::atom_var));
-		f = posLit(ctx.addVar(Var_t::atom_var));
-		x = posLit(ctx.addVar(Var_t::atom_var));
-		y = posLit(ctx.addVar(Var_t::atom_var));
+		a = posLit(ctx.addVar(Var_t::Atom));
+		b = posLit(ctx.addVar(Var_t::Atom));
+		c = posLit(ctx.addVar(Var_t::Atom));
+		d = posLit(ctx.addVar(Var_t::Atom));
+		e = posLit(ctx.addVar(Var_t::Atom));
+		f = posLit(ctx.addVar(Var_t::Atom));
+		x = posLit(ctx.addVar(Var_t::Atom));
+		y = posLit(ctx.addVar(Var_t::Atom));
 		ctx.startAddConstraints();
 	}
 	void setUp()    { newMin = 0; data = 0; }
@@ -85,8 +91,16 @@ public:
 	}
 	void testEmpty() {
 		MinimizeBuilder b;
-		newMin = buildAndAttach(b);
-		CPPUNIT_ASSERT(countMinLits() == 0);
+		CPPUNIT_ASSERT(!b.build(ctx));
+	}
+	void testEmptyMultiLevel() {
+		MinimizeBuilder x;
+		x.add(0, WeightLiteral(posLit(0), 1));
+		x.add(1, WeightLiteral(posLit(0), 1));
+		data = x.build(ctx);
+		CPPUNIT_ASSERT(isSentinel(data->lits[0].first));
+		CPPUNIT_ASSERT(data->lits[0].second == 0);
+		CPPUNIT_ASSERT(data->weights.size() == 1);
 	}
 	
 	void testOneLevelLits() {
@@ -99,7 +113,7 @@ public:
 		min.push_back( WeightLiteral(a, 2) ); // duplicate lit
 		min.push_back( WeightLiteral(d, 1) );
 		min.push_back( WeightLiteral(e, 2) ); // false lit
-		newMin = buildAndAttach(MinimizeBuilder().addRule(min));
+		newMin = buildAndAttach(MinimizeBuilder().add(0, min));
 		CPPUNIT_ASSERT(newMin->numRules() == 1);
 		CPPUNIT_ASSERT(countMinLits() == 3);
 		CPPUNIT_ASSERT(newMin->shared()->adjust(0) == 1);
@@ -127,21 +141,21 @@ public:
 		min.push_back( WeightLiteral(d, 1) );
 		min.push_back( WeightLiteral(b, 1) ); // duplicate lit
 		
-		builder.addRule(min);
+		builder.add(3, min);
 		min.clear();
 		min.push_back( WeightLiteral(e, 2) ); // false lit
 		min.push_back( WeightLiteral(f, 1) );
 		min.push_back( WeightLiteral(x, 2) );
 		min.push_back( WeightLiteral(y, 3) );
 		min.push_back( WeightLiteral(b, 1) ); // duplicate lit
-		builder.addRule(min);
+		builder.add(2, min);
 		min.clear();
 		min.push_back( WeightLiteral(b, 2) ); // duplicate lit
 		min.push_back( WeightLiteral(a, 1) ); // duplicate lit
 		min.push_back( WeightLiteral(a, 2) ); // duplicate lit
 		min.push_back( WeightLiteral(c, 2) ); // true lit
 		min.push_back( WeightLiteral(d, 1) ); // duplicate lit
-		builder.addRule(min);
+		builder.add(1, min);
 		
 		newMin = buildAndAttach(builder);
 		CPPUNIT_ASSERT(newMin->numRules() == 3);
@@ -163,12 +177,12 @@ public:
 		min.push_back( WeightLiteral(b, 2) );
 		min.push_back( WeightLiteral(c, 1) );
 		min.push_back( WeightLiteral(d, 3) );
-		builder.addRule(min);
+		builder.add(3, min);
 		
 		min.clear();
 		min.push_back( WeightLiteral(b, 1) );
 		min.push_back( WeightLiteral(d, 1) );
-		builder.addRule(min);
+		builder.add(2, min);
 		
 		newMin = buildAndAttach(builder);
 		// b = 0
@@ -187,11 +201,11 @@ public:
 		min.push_back( WeightLiteral(c, 2) );
 		min.push_back( WeightLiteral(d, 1) );
 		min.push_back( WeightLiteral(~d, 2) );
-		builder.addRule(min);
+		builder.add(2, min);
 		min.clear();
 		min.push_back( WeightLiteral(~c, 1) );
 		min.push_back( WeightLiteral(e, 1) );
-		builder.addRule(min);
+		builder.add(1, min);
 		newMin = buildAndAttach(builder);
 		CPPUNIT_ASSERT(countMinLits() == 5);
 		CPPUNIT_ASSERT(newMin->shared()->adjust(0) == 1 && newMin->shared()->adjust(1) == 1);
@@ -206,13 +220,58 @@ public:
 		WeightLitVec min;
 		min.push_back( WeightLiteral(a, 1) );
 		min.push_back( WeightLiteral(~a, 1) );
-		builder.addRule(min);
+		builder.add(2, min);
 		min.clear();
 		min.push_back( WeightLiteral(a, 1) );
-		builder.addRule(min);
+		builder.add(1, min);
 		newMin = buildAndAttach(builder);
 		CPPUNIT_ASSERT(countMinLits() == 1);
 		CPPUNIT_ASSERT(newMin->shared()->adjust(0) == 1 && newMin->shared()->adjust(1) == 0);
+	}
+	void testMergeComplementaryLits3() {
+		MinimizeBuilder builder;
+		WeightLitVec min;
+		min.push_back( WeightLiteral(~a, 2) );
+		min.push_back( WeightLiteral(~a, -3));
+		builder.add(1, min);
+		min.clear();
+		min.push_back(WeightLiteral(~a, 1) );
+		min.push_back(WeightLiteral(a, -4) );
+		builder.add(0, min);
+		newMin = buildAndAttach(builder);
+		CPPUNIT_ASSERT(countMinLits() == 1);
+		CPPUNIT_ASSERT(newMin->shared()->lits[0].first == a);
+		CPPUNIT_ASSERT(newMin->shared()->adjust(0) == -1 && newMin->shared()->adjust(1) == 1);
+		CPPUNIT_ASSERT(newMin->shared()->weights[0].weight == 1);
+		CPPUNIT_ASSERT(newMin->shared()->weights[1].weight == -5);
+	}
+	void testInitFromOther() {
+		MinimizeBuilder builder;
+		WeightLitVec min;
+		min.push_back( WeightLiteral(~a, 2) );
+		min.push_back( WeightLiteral(~a, -3));
+		builder.add(1, min);
+		builder.add(1, CLASP_WEIGHT_T_MIN);
+		min.clear();
+		min.push_back(WeightLiteral(~a, 1) );
+		min.push_back(WeightLiteral(a, -4) );
+		builder.add(0, min);
+		builder.add(0, CLASP_WEIGHT_T_MAX);
+		SharedMinimizeData* d1 = builder.build(ctx);
+		builder.clear();
+		builder.add(*d1);
+		SharedMinimizeData* d2 = builder.build(ctx);
+		CPPUNIT_ASSERT(d1->numRules() == d2->numRules());
+		CPPUNIT_ASSERT(std::equal(d1->adjust(), d1->adjust() + d1->numRules(), d2->adjust()));
+		CPPUNIT_ASSERT(d1->weights.size() == d2->weights.size());
+		for (uint32 i = 0, end = (uint32)d1->weights.size(); i != end; ++i) {
+			CPPUNIT_ASSERT(d1->weights[i].level == d2->weights[i].level && d1->weights[i].weight == d2->weights[i].weight && d1->weights[i].next == d2->weights[i].next);
+		}
+		for (const WeightLiteral* it = d1->lits, *oit = d2->lits; !isSentinel(it->first); ++it, ++oit) {
+			CPPUNIT_ASSERT(*it == *oit);
+		}
+		d1->release();
+		d2->release();
 	}
 	void testNegativeLowerInit() {
 		WeightLitVec aMin, bMin, cMin;
@@ -223,9 +282,9 @@ public:
 		cMin.push_back( WeightLiteral(a, 1) );
 		cMin.push_back( WeightLiteral(b, 1) );
 		data = MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin)
-			.addRule(cMin)
+			.add(3, aMin)
+			.add(2, bMin)
+			.add(1, cMin)
 			.build(ctx);
 		CPPUNIT_ASSERT(data->lower(0) == 0);
 		CPPUNIT_ASSERT(data->lower(1) == -2);
@@ -239,9 +298,9 @@ public:
 		bMin.push_back( WeightLiteral(~a, 1) );
 		cMin.push_back( WeightLiteral(a, 1) );
 		data = MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin)
-			.addRule(cMin)
+			.add(3, aMin)
+			.add(2, bMin)
+			.add(1, cMin)
 			.build(ctx);
 		newMin = createMin(ctx, *ctx.master(), data, MinimizeMode_t::bb_step_hier);
 		newMin->integrateBound(*ctx.master());
@@ -266,8 +325,8 @@ public:
 		aMin.push_back( WeightLiteral(a, 1) );
 		bMin.push_back( WeightLiteral(b, 1) );
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin));
+			.add(2, aMin)
+			.add(1, bMin));
 		
 		Solver& solver = *ctx.master();
 		solver.assume(b);
@@ -292,8 +351,8 @@ public:
 		bMin.push_back( WeightLiteral(b, 1) );
 
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin));
+			.add(2, aMin)
+			.add(1, bMin));
 		Solver& solver = *ctx.master();
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(b) && solver.propagate());
@@ -313,16 +372,15 @@ public:
 		WeightLitVec aMin;
 		aMin.push_back( WeightLiteral(x, 1) );
 		aMin.push_back( WeightLiteral(y, 1) );
-		newMin = buildAndAttach(MinimizeBuilder().addRule(aMin));
-		// disable backjumping
-		ctx.setProject(a.var(), true);
+		newMin = buildAndAttach(MinimizeBuilder().add(0, aMin));
 		Solver& solver = *ctx.master();
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(~x) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(y) && solver.propagate());
 		newMin->commitUpperBound(solver);
 		solver.undoUntil(1);
-		solver.setBacktrackLevel(1);
+		// disable backjumping
+		solver.setBacktrackLevel(1, Solver::undo_pop_proj_level);
 		CPPUNIT_ASSERT_EQUAL(true, newMin->integrateBound(solver));
 		CPPUNIT_ASSERT(solver.decisionLevel() == 1 && solver.isTrue(~x));
 		solver.backtrack();
@@ -339,8 +397,8 @@ public:
 		bMin.push_back( WeightLiteral(b, 1) );
 
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin));
+			.add(2, aMin)
+			.add(1, bMin));
 		Solver& solver = *ctx.master();
 				
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
@@ -369,8 +427,8 @@ public:
 		bMin.push_back( WeightLiteral(c, 1) );
 		bMin.push_back( WeightLiteral(d, 1) );
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin));
+			.add(2, aMin)
+			.add(1, bMin));
 		Solver& solver = *ctx.master();
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(c) && solver.propagate());
@@ -393,8 +451,8 @@ public:
 		bMin.push_back( WeightLiteral(d, 1) );
 		wsum_t bound[2] = {1,1};
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin)
+			.add(2, aMin)
+			.add(1, bMin)
 			, MinimizeMode_t::enumerate, bound, 2);
 		
 		CPPUNIT_ASSERT(newMin->shared()->optimum(0) == SharedMinimizeData::maxBound());
@@ -425,7 +483,7 @@ public:
 		aMin.push_back( WeightLiteral(c, 1) );
 		aMin.push_back( WeightLiteral(d, 2) );
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(aMin));
+			.add(0, aMin));
 		Solver& solver = *ctx.master();
 		solver.assume(a) && solver.propagate();
 		solver.force(b,0)&& solver.propagate();
@@ -449,7 +507,7 @@ public:
 	void testSetModelMayBacktrackMultiLevels() {
 		WeightLitVec aMin;
 		aMin.push_back( WeightLiteral(a, 1) );
-		newMin = buildAndAttach(MinimizeBuilder().addRule(aMin));
+		newMin = buildAndAttach(MinimizeBuilder().add(0, aMin));
 		Solver& solver = *ctx.master();
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(b) && solver.propagate());
@@ -468,17 +526,16 @@ public:
 		bMin.push_back( WeightLiteral(e, 1) );
 		bMin.push_back( WeightLiteral(f, 1) );
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin));
-		// disbale backjumping
-		ctx.setProject(a.var(), true);
-		ctx.setProject(e.var(), true);
+			.add(2, aMin)
+			.add(1, bMin));
 		Solver& solver = *ctx.master();
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(e) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(f) && solver.propagate());
 		newMin->commitUpperBound(solver);
 		solver.backtrack();
+		// disbale backjumping
+		solver.setBacktrackLevel(2, Solver::undo_pop_proj_level);
 		CPPUNIT_ASSERT_EQUAL(true, newMin->integrateBound(solver));
 		CPPUNIT_ASSERT(solver.decisionLevel() == 2);
 		solver.backtrack();
@@ -497,11 +554,10 @@ public:
 		aMin.push_back( WeightLiteral(b, 2) );
 		aMin.push_back( WeightLiteral(c, 1) );
 		wsum_t bound   = 2;
-		newMin         = buildAndAttach(MinimizeBuilder().addRule(aMin), MinimizeMode_t::optimize, &bound, 1);
+		newMin         = buildAndAttach(MinimizeBuilder().add(0, aMin), MinimizeMode_t::optimize, &bound, 1);
 		Solver& solver = *ctx.master();
 		solver.assume(a) && solver.propagate();
-		solver.setBacktrackLevel(1);
-		ctx.setProject(a.var(), true);
+		solver.setBacktrackLevel(1, Solver::undo_pop_proj_level);
 		CPPUNIT_ASSERT(solver.isTrue(~b));
 		LitVec r;
 		solver.reason(~b, r);
@@ -516,7 +572,7 @@ public:
 		CPPUNIT_ASSERT(solver.decisionLevel() == 1 && solver.isTrue(~b));
 		r.clear();
 		solver.reason(~b, r);
-		CPPUNIT_ASSERT(r.empty() || (r.size() == 1 && r[0] == posLit(0)));
+		CPPUNIT_ASSERT(r.empty() || (r.size() == 1 && r[0] == lit_true()));
 	}
 
 	void testRootLevelMadness() {
@@ -528,8 +584,8 @@ public:
 		bMin.push_back( WeightLiteral(e, 2) );
 		bMin.push_back( WeightLiteral(f, 1) );
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin));
+			.add(2, aMin)
+			.add(1, bMin));
 		Solver& solver = *ctx.master();
 		solver.assume(a) && solver.propagate();
 		solver.assume(c) && solver.propagate();
@@ -563,7 +619,7 @@ public:
 		aMin.push_back( WeightLiteral(c, 1) );
 		aMin.push_back( WeightLiteral(d, 1) );
 		Solver& solver = *ctx.master();
-		data   = MinimizeBuilder().addRule(aMin).build(ctx);
+		data   = MinimizeBuilder().add(0, aMin).build(ctx);
 		newMin = createMin(ctx, solver, data);
 		newMin->integrateBound(solver);
 		solver.assume(a) && solver.propagate();
@@ -587,7 +643,7 @@ public:
 		aMin.push_back( WeightLiteral(c, 1) );
 		aMin.push_back( WeightLiteral(d, 1) );
 		Solver& solver = *ctx.master();
-		data = MinimizeBuilder().addRule(aMin).build(ctx);
+		data = MinimizeBuilder().add(0, aMin).build(ctx);
 		SumVec opt(data->numRules());
 		newMin = createMin(ctx, solver, data);
 		newMin->integrateBound(solver);
@@ -596,12 +652,10 @@ public:
 		solver.assume(b) && solver.propagate();
 		solver.assume(f) && solver.propagate();
 		solver.assume(c) && solver.propagate();
-		ctx.setProject(a.var(), true);
-		ctx.setProject(b.var(), true);
-		solver.setBacktrackLevel(3);
+		solver.setBacktrackLevel(1, Solver::undo_pop_proj_level);
 		opt[0] = 2;
 		CPPUNIT_ASSERT(setOptimum(solver, opt, true));
-		CPPUNIT_ASSERT(solver.decisionLevel() == 1 && solver.queueSize() == 3);
+		CPPUNIT_ASSERT(solver.decisionLevel() == 1 && solver.queueSize() >= 3);
 		solver.propagate();
 		opt[0] = 0;
 		CPPUNIT_ASSERT(!setOptimum(solver, opt, true));
@@ -617,7 +671,7 @@ public:
 		min.push_back( WeightLiteral(a, 1) );
 		min.push_back( WeightLiteral(b, 1) );
 		min.push_back( WeightLiteral(c, 1) );
-		data   = MinimizeBuilder().addRule(min).build(ctx);
+		data   = MinimizeBuilder().add(0, min).build(ctx);
 		wsum_t bound = 2;
 		Solver& s = *ctx.master();
 		newMin = createMin(ctx, s, data, MinimizeMode_t::bb_step_dec);
@@ -637,8 +691,8 @@ public:
 		bMin.push_back( WeightLiteral(f, 3) );
 		
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin));
+			.add(2, aMin)
+			.add(1, bMin));
 		Solver& solver = *ctx.master();
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(b) && solver.propagate());
@@ -661,7 +715,7 @@ public:
 		aMin.push_back( WeightLiteral(a, 1) );
 		aMin.push_back( WeightLiteral(b, 1) );
 		aMin.push_back( WeightLiteral(c, 1) );
-		newMin = buildAndAttach(MinimizeBuilder().addRule(aMin));
+		newMin = buildAndAttach(MinimizeBuilder().add(0, aMin));
 		Solver& solver = *ctx.master();
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(b) && solver.propagate());
@@ -679,8 +733,8 @@ public:
 		min1.push_back( WeightLiteral(a, 1) );
 		min2.push_back( WeightLiteral(b, 1) );
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(min1)
-			.addRule(min2));
+			.add(2, min1)
+			.add(1, min2));
 		Solver& solver = *ctx.master();
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(~a) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.force(b, 0) && solver.propagate());
@@ -701,8 +755,8 @@ public:
 		min2.push_back( WeightLiteral(f, 1) );
 		
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(min1)
-			.addRule(min2));
+			.add(2, min1)
+			.add(1, min2));
 		Solver& solver = *ctx.master();
 		SumVec opt(newMin->numRules());
 		opt[0] = 3;
@@ -727,9 +781,8 @@ public:
 		min2.push_back( WeightLiteral(f, 1) );
 		
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(min1)
-			.addRule(min2));
-		ctx.setProject(x.var(), true);
+			.add(2, min1)
+			.add(1, min2));
 		Solver& solver = *ctx.master();
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(b) && solver.propagate());
@@ -742,7 +795,7 @@ public:
 		
 		newMin->commitUpperBound(solver);
 		solver.undoUntil(3);
-		solver.setBacktrackLevel(3);
+		solver.setBacktrackLevel(3, Solver::undo_pop_proj_level);
 		CPPUNIT_ASSERT(newMin->integrateBound(solver));
 		CPPUNIT_ASSERT_EQUAL(true, solver.force(f,0) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.isTrue(~d));
@@ -769,8 +822,8 @@ public:
 		min2.push_back( WeightLiteral(c, 1) );
 		
 		newMin = buildAndAttach(MinimizeBuilder()
-			.addRule(min1)
-			.addRule(min2));
+			.add(2, min1)
+			.add(1, min2));
 		Solver& solver = *ctx.master();
 		
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
@@ -795,8 +848,8 @@ public:
 		bMin.push_back( WeightLiteral(c, 1) );
 		bMin.push_back( WeightLiteral(d, 1) );
 		data = MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin)
+			.add(2, aMin)
+			.add(1, bMin)
 			.build(ctx);
 		wsum_t bound[2] = {wsum_t(1),wsum_t(1)};
 		data->setMode(MinimizeMode_t::optimize, bound, 2);
@@ -817,8 +870,8 @@ public:
 		bMin.push_back( WeightLiteral(~a, 1) );
 		bMin.push_back( WeightLiteral(d, 1) );
 		data = MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin)
+			.add(2, aMin)
+			.add(1, bMin)
 			.build(ctx);
 		newMin = static_cast<DefaultMinimize*>(data->attach(*ctx.master(), MinimizeMode_t::opt_bb));
 		SumVec opt;
@@ -836,7 +889,7 @@ public:
 		WeightLitVec min1;
 		min1.push_back( WeightLiteral(a, 1) );
 		min1.push_back( WeightLiteral(b, 0) );
-		newMin = buildAndAttach(MinimizeBuilder().addRule(min1));
+		newMin = buildAndAttach(MinimizeBuilder().add(0, min1));
 		Solver& solver = *ctx.master();
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(b) && solver.force(~c,0) && solver.propagate());
@@ -849,7 +902,7 @@ public:
 		WeightLitVec min1;
 		min1.push_back( WeightLiteral(a, 1) );
 		min1.push_back( WeightLiteral(b, 1) );
-		newMin = buildAndAttach(MinimizeBuilder().addRule(min1, -2));
+		newMin = buildAndAttach(MinimizeBuilder().add(0, min1).add(0, -2));
 		Solver& solver = *ctx.master();
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(a) && solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(true, solver.assume(b) && solver.propagate());
@@ -869,7 +922,7 @@ public:
 		min1.push_back( WeightLiteral(b, 1) );
 		min1.push_back( WeightLiteral(c, 1) );
 		min1.push_back( WeightLiteral(d, 1) );
-		data = MinimizeBuilder().addRule(min1, -2).build(ctx);
+		data = MinimizeBuilder().add(0, min1).add(0, -2).build(ctx);
 		Solver& solver = *ctx.master();
 		ctx.addUnary(a);
 		solver.propagate();
@@ -885,16 +938,16 @@ public:
 
 	void testAssumption() {
 		SharedContext ctx;
-		a = posLit(ctx.addVar(Var_t::atom_var));
-		b = posLit(ctx.addVar(Var_t::atom_var));
-		c = posLit(ctx.addVar(Var_t::atom_var));
+		a = posLit(ctx.addVar(Var_t::Atom));
+		b = posLit(ctx.addVar(Var_t::Atom));
+		c = posLit(ctx.addVar(Var_t::Atom));
 		ctx.startAddConstraints();
 		WeightLitVec min1;
 		min1.push_back( WeightLiteral(a, 1) );
 		min1.push_back( WeightLiteral(b, 1) );
 		min1.push_back( WeightLiteral(c, 1) );
 		Solver& solver = *ctx.master();
-		data   = MinimizeBuilder().addRule(min1).build(ctx);
+		data   = MinimizeBuilder().add(0, min1).build(ctx);
 		newMin = createMin(ctx, solver, data, MinimizeMode_t::bb_step_inc);
 		Literal minAssume = posLit(solver.pushTagVar(true));
 		SumVec opt(1, 0);
@@ -917,12 +970,12 @@ public:
 		min.push_back( WeightLiteral(b, 1) );
 		min.push_back( WeightLiteral(c, 1) );
 		MinimizeBuilder builder;
-		builder.addRule(min);
+		builder.add(2, min);
 		min.clear();
 		min.push_back( WeightLiteral(d, 1) );
 		min.push_back( WeightLiteral(e, 1) );
 		min.push_back( WeightLiteral(f, 1) );
-		builder.addRule(min);
+		builder.add(0, min);
 		Solver& solver = *ctx.master();
 		data   = builder.build(ctx);
 		newMin = createMin(ctx, solver, data, MinimizeMode_t::bb_step_hier);
@@ -944,10 +997,10 @@ public:
 		MinimizeBuilder builder;
 		WeightLitVec min;
 		min.push_back( WeightLiteral(a, 1) );
-		builder.addRule(min);
+		builder.add(2, min);
 		min.clear();
 		min.push_back( WeightLiteral(~b, 1) );
-		builder.addRule(min);
+		builder.add(1, min);
 		
 		ctx.addBinary(~a, b);
 		ctx.addBinary(a, ~b);
@@ -970,7 +1023,7 @@ public:
 		min.push_back( WeightLiteral(a, 1) );
 		min.push_back( WeightLiteral(b, 1) );
 		min.push_back( WeightLiteral(c, 1) );
-		builder.addRule(min);
+		builder.add(0, min);
 		wsum_t bound = 1;
 		ctx.addUnary(a);
 		ctx.addUnary(b);
@@ -1039,21 +1092,19 @@ public:
 		MinimizeBuilder b;
 		ctx.startAddConstraints();
 		data = b.build(ctx);
-		ctx.endInit();
-		min = data->attach(*ctx.master(), MinimizeMode_t::opt_usc);
-		CPPUNIT_ASSERT(min->integrate(*ctx.master()));
+		CPPUNIT_ASSERT(data == 0);
 	}
 	void testEnumerate() {
-		Var a = ctx.addVar(Var_t::atom_var);
-		Var b = ctx.addVar(Var_t::atom_var);
-		Var c = ctx.addVar(Var_t::atom_var);
+		Var a = ctx.addVar(Var_t::Atom);
+		Var b = ctx.addVar(Var_t::Atom);
+		Var c = ctx.addVar(Var_t::Atom);
 		ctx.startAddConstraints();
 		WeightLitVec lits;
 		MinimizeBuilder builder;
 		lits.push_back(WeightLiteral(posLit(a), 1));
 		lits.push_back(WeightLiteral(posLit(b), 1));
 		lits.push_back(WeightLiteral(posLit(c), 1));
-		builder.addRule(lits);
+		builder.add(0, lits);
 		data = builder.build(ctx);
 		ctx.endInit();
 		wsum_t bound = 1;
@@ -1067,14 +1118,14 @@ public:
 		CPPUNIT_ASSERT(ctx.master()->isFalse(posLit(c)));
 	}
 	void testOptimize() {
-		Var a = ctx.addVar(Var_t::atom_var);
-		Var b = ctx.addVar(Var_t::atom_var);
+		Var a = ctx.addVar(Var_t::Atom);
+		Var b = ctx.addVar(Var_t::Atom);
 		Solver& s = ctx.startAddConstraints();
 		WeightLitVec lits;
 		MinimizeBuilder builder;
 		lits.push_back(WeightLiteral(posLit(a), 1));
 		lits.push_back(WeightLiteral(posLit(b), 1));
-		builder.addRule(lits);
+		builder.add(0, lits);
 		data = builder.build(ctx);
 		ctx.endInit();
 		data->setMode(MinimizeMode_t::optimize);
@@ -1090,14 +1141,14 @@ public:
 		CPPUNIT_ASSERT(s.isFalse(lits[0].first) && s.isFalse(lits[1].first));
 	}
 	void testOptimizeGP() {
-		Var a = ctx.addVar(Var_t::atom_var);
-		Var b = ctx.addVar(Var_t::atom_var);
+		Var a = ctx.addVar(Var_t::Atom);
+		Var b = ctx.addVar(Var_t::Atom);
 		Solver& s = ctx.startAddConstraints();
 		WeightLitVec lits;
 		MinimizeBuilder builder;
 		lits.push_back(WeightLiteral(posLit(a), 1));
 		lits.push_back(WeightLiteral(posLit(b), 1));
-		builder.addRule(lits);
+		builder.add(0, lits);
 		data = builder.build(ctx);
 		ctx.endInit();
 		data->setMode(MinimizeMode_t::optimize);
@@ -1117,11 +1168,11 @@ public:
 
 	void testMtBug1() {
 		WeightLitVec lits;
-		lits.push_back(WeightLiteral(posLit(ctx.addVar(Var_t::atom_var)), 1));
-		lits.push_back(WeightLiteral(posLit(ctx.addVar(Var_t::atom_var)), 1));
+		lits.push_back(WeightLiteral(posLit(ctx.addVar(Var_t::Atom)), 1));
+		lits.push_back(WeightLiteral(posLit(ctx.addVar(Var_t::Atom)), 1));
 		Solver& s1 = ctx.startAddConstraints();
-		data       = MinimizeBuilder().addRule(lits).build(ctx);
-		ctx.setConcurrency(2, SharedContext::mode_reserve);
+		data       = MinimizeBuilder().add(0, lits).build(ctx);
+		ctx.setConcurrency(2, SharedContext::resize_reserve);
 		ctx.endInit(true);
 		Solver& s2 = *ctx.solver(1);
 		data->setMode(MinimizeMode_t::enumOpt);
@@ -1157,8 +1208,8 @@ public:
 		CPPUNIT_ASSERT(numModels == 1);
 	}
 	void testNegativeLower() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(a, b);
 		WeightLitVec aMin, bMin;
@@ -1166,8 +1217,8 @@ public:
 		aMin.push_back( WeightLiteral(b, 1) );
 		bMin.push_back( WeightLiteral(~a, 1) );
 		data = MinimizeBuilder()
-			.addRule(aMin)
-			.addRule(bMin)
+			.add(2, aMin)
+			.add(1, bMin)
 			.build(ctx);
 		ctx.endInit();
 		data->setMode(MinimizeMode_t::optimize);

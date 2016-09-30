@@ -26,10 +26,12 @@
 #include <cppunit/TextTestResult.h>
 #include <string.h>
 #include <stdexcept>
+#include <stdio.h>
+#include <limits.h>
 #if defined (_MSC_VER) && _MSC_VER >= 1200
 #include <crtdbg.h>
 #endif
-// #define CHECK_HEAP 1;
+//#define CHECK_HEAP 1
 
 class CmdLineRunner : public CPPUNIT_NS::TextUi::TestRunner {
 public:
@@ -54,6 +56,18 @@ public:
 	}
 };
 
+void dump(CPPUNIT_NS::Test* root, int level, int maxLevel) {
+	if (root && level != maxLevel) {
+		printf("%s\n", root->getName().c_str());
+		for (int i = 0; i < root->getChildTestCount(); i++) {
+			CPPUNIT_NS::Test* c = root->getChildTestAt(i);
+			if (level + 1 < maxLevel) { dump(c, level + 1, maxLevel); }
+			else { 
+				printf("%s\n", c->getName().c_str());
+			}
+		}
+	}
+}
 int main(int argc, char** argv) {
 #if defined (_MSC_VER) && defined (CHECK_HEAP) && _MSC_VER >= 1200 
 	_CrtSetDbgFlag(_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG) |
@@ -74,6 +88,16 @@ int main(int argc, char** argv) {
 #else
 	runner.setOutputter( new CPPUNIT_NS::CompilerOutputter( &runner.result(), std::cout, "%p:%l:" ) );
 #endif
+	if (argc == 2) {
+		if (strcmp(argv[1], "--list") == 0) {
+			dump(CPPUNIT_NS::TestFactoryRegistry::getRegistry().makeTest(), 0, 1);
+			return 0;
+		}
+		else if (strcmp(argv[1], "--list-all") == 0) {
+			dump(CPPUNIT_NS::TestFactoryRegistry::getRegistry().makeTest(), 0, INT_MAX);
+			return 0;
+		}
+	}
 	// Add all registered tests.
 	runner.addTest( CPPUNIT_NS::TestFactoryRegistry::getRegistry().makeTest() );
 	// Run selected tests.

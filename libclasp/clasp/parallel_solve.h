@@ -1,5 +1,5 @@
 // 
-// Copyright (c) 2010-2012, Benjamin Kaufmann
+// Copyright (c) 2010-2015, Benjamin Kaufmann
 // 
 // This file is part of Clasp. See http://www.cs.uni-potsdam.de/clasp/ 
 // 
@@ -35,17 +35,25 @@
 
 /*!
  * \file 
- * Defines classes controlling multi-threaded parallel solving.
- * 
+ * \brief Defines classes controlling multi-threaded parallel solving.
  */
 namespace Clasp { 
 //! Namespace for types and functions needed for implementing multi-threaded parallel solving.
 namespace mt {
 
+/**
+ * \defgroup mt Multi-threading
+ * \brief Parallel solving and related classes.
+ * \ingroup enumerator
+ */
+//@{
+
 class ParallelHandler;
 class ParallelSolve;
 
+//! Options for controlling parallel solving.
 struct ParallelSolveOptions : BasicSolveOptions {
+	//! Nogood distribution options.
 	struct Distribution : Distributor::Policy {
 		enum Mode { mode_global = 0, mode_local = 1 };
 		Distribution(Mode m = mode_global) : Distributor::Policy(), mode(m) {}
@@ -53,13 +61,16 @@ struct ParallelSolveOptions : BasicSolveOptions {
 		uint32 mode;
 	};
 	ParallelSolveOptions() {}
+	//! Algorithm options.
 	struct Algorithm {
+		//! Possible search strategies.
 		enum SearchMode { mode_split = 0, mode_compete  = 1 };
 		Algorithm() : threads(1), mode(mode_compete) {}
 		uint32     threads;
 		SearchMode mode;
 	};
-	struct Integration { /**< Nogood integration options. */
+	//! Nogood integration options.
+	struct Integration {
 		static const uint32 GRACE_MAX = (1u<<28)-1;
 		Integration() :  grace(1024), filter(filter_gp), topo(topo_all) {}
 		enum Filter   { filter_no = 0, filter_gp = 1, filter_sat = 2, filter_heuristic = 3 };
@@ -68,19 +79,20 @@ struct ParallelSolveOptions : BasicSolveOptions {
 		uint32 filter: 2;  /**< Filter for integrating shared nogoods (one of Filter). */   
 		uint32 topo  : 2;  /**< Integration topology */
 	};
-	struct GRestarts {   /**< Options for configuring global restarts. */
+	//! Global restart options.
+	struct GRestarts {
 		GRestarts():maxR(0) {}
 		uint32           maxR;
 		ScheduleStrategy sched;
 	};
-	Integration  integrate; /**< Nogood integration parameters.     */
-	Distribution distribute;/**< Nogood distribution parameters.    */
-	GRestarts    restarts;  /**< Global restart strategy.           */
-	Algorithm    algorithm; /**< Parallel algorithm to use.         */
+	Integration  integrate; //!< Nogood integration options to apply during search.
+	Distribution distribute;//!< Nogood distribution options to apply during search.
+	GRestarts    restarts;  //!< Global restart strategy to apply during search.
+	Algorithm    algorithm; //!< Parallel algorithm to use.
 	//! Allocates a new solve object.
 	SolveAlgorithm* createSolveObject() const;
 	//! Returns the number of threads that can run concurrently on the current hardware.
-	static uint32   recommendedSolvers()     { return Clasp::thread::hardware_concurrency(); }
+	static uint32   recommendedSolvers()     { return Clasp::mt::thread::hardware_concurrency(); }
 	//! Returns number of maximal number of supported threads.
 	static uint32   supportedSolvers()       { return 64; }
 	//! Returns the peers of the solver with the given id assuming the given topology.
@@ -100,7 +112,7 @@ struct ParallelSolveOptions : BasicSolveOptions {
  */
 class ParallelSolve : public SolveAlgorithm {
 public:
-	explicit ParallelSolve(Enumerator* e, const ParallelSolveOptions& opts);
+	explicit ParallelSolve(const ParallelSolveOptions& opts);
 	~ParallelSolve();
 	// base interface
 	virtual bool interrupted() const;
@@ -137,8 +149,11 @@ private:
 	// Algorithm steps
 	void   setIntegrate(uint32 grace, uint8 filter);
 	void   setRestarts(uint32 maxR, const ScheduleStrategy& rs);
-	bool   beginSolve(SharedContext& ctx);
+	bool   beginSolve(SharedContext& ctx, const LitVec& assume);
 	bool   doSolve(SharedContext& ctx, const LitVec& assume);
+	void   doStart(SharedContext& ctx, const LitVec& assume);
+	int    doNext(int last);
+	void   doStop();
 	bool   doInterrupt();
 	void   solveParallel(uint32 id);
 	void   initQueue();
@@ -147,6 +162,7 @@ private:
 	bool   waitOnSync(Solver& s);
 	void   exception(uint32 id, PathPtr& path, ErrorCode e, const char* what);
 	void   reportProgress(const Event& ev) const;
+	void   reportProgress(const Solver& s, const char* msg) const;
 	// -------------------------------------------------------------------------------------------
 	typedef ParallelSolveOptions::Distribution Distribution;
 	struct SharedData;
@@ -161,7 +177,7 @@ private:
 	uint32            intFlags_;     // bitset controlling clause integration
 	bool              modeSplit_;
 };
-
+//! An event type for debugging messages sent between threads.
 struct MessageEvent : SolveEvent<MessageEvent> {
 	enum Action { sent, received, completed };
 	MessageEvent(const Solver& s, const char* message, Action a, double t = 0.0) 
@@ -195,7 +211,7 @@ public:
 	int  error() const   { return (int)error_; }
 	void setWinner()     { win_ = 1; }
 	bool winner() const  { return win_ != 0; }
-	void setThread(Clasp::thread& x) { assert(!joinable()); x.swap(thread_); assert(joinable()); }
+	void setThread(Clasp::mt::thread& x) { assert(!joinable()); x.swap(thread_); assert(joinable()); }
 	
 	//! True if *this has an associated thread of execution, false otherwise.
 	bool joinable() const { return thread_.joinable(); }
@@ -271,7 +287,7 @@ private:
 	ParallelSolve*     ctrl_;       // my message source
 	Solver*            solver_;     // my solver
 	const SolveParams* params_;     // my solving params
-	Clasp::thread      thread_;     // active thread or empty for master
+	Clasp::mt::thread  thread_;     // active thread or empty for master
 	RecBuffer          received_;   // received clauses not yet integrated
 	ClauseDB           integrated_; // my integrated clauses
 	size_type          recEnd_;     // where to put next received clause
@@ -291,7 +307,7 @@ private:
 		}
 	} gp_;
 };
-
+//! A class that uses a global list to exchange nogoods between threads.
 class GlobalDistribution : public Distributor {
 public:
 	explicit GlobalDistribution(const Policy& p, uint32 maxShare, uint32 topo);
@@ -324,7 +340,7 @@ private:
 	Queue*           queue_;
 	ThreadInfo*      threadId_;
 };
-
+//! A class that uses thread-local lists to exchange nogoods between threads.
 class LocalDistribution : public Distributor {
 public:
 	explicit LocalDistribution(const Policy& p, uint32 maxShare, uint32 topo);
@@ -346,7 +362,7 @@ private:
 	RawStack       blocks_;    // allocated node blocks
 	uint32         numThread_; // number of threads, i.e. size of array thread_
 };
-
+//@}
 } }
 #endif
 

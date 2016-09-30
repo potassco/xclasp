@@ -52,7 +52,7 @@ class SatEliteTest : public CppUnit::TestFixture {
 public:
 	SatEliteTest(){
 		for (int i = 0; i < 10; ++i) {
-			ctx.addVar(Var_t::atom_var);
+			ctx.addVar(Var_t::Atom);
 		}
 		opts.satPre.type = SatPreParams::sat_pre_ve_bce;
 		ctx.startAddConstraints();
@@ -88,7 +88,7 @@ public:
 	}
 
 	void testClauseCreatorAddsToPreprocessor() {
-		ctx.setConfiguration(&opts, false);
+		ctx.setConfiguration(&opts, Ownership_t::Retain);
 		ctx.setPreserveModels();
 		ClauseCreator nc(ctx.master());
 		nc.start().add(posLit(1)).add(posLit(2)).end();
@@ -102,7 +102,7 @@ public:
 		std::stringstream prg;
 		SharedContext ctx2; 
 		opts.satPre.disableBce();
-		ctx2.setConfiguration(&opts, false);
+		ctx2.setConfiguration(&opts, Ownership_t::Retain);
 		SatBuilder api;
 		api.startProgram(ctx2);
 		
@@ -121,7 +121,7 @@ public:
 	void testFreeze() {
 		std::stringstream prg;
 		SharedContext ctx2;
-		ctx2.setConfiguration(&opts, false);
+		ctx2.setConfiguration(&opts, Ownership_t::Retain);
 		SatBuilder api;
 		api.startProgram(ctx2);
 		prg << "c simple test case\n"
@@ -142,7 +142,6 @@ public:
 		cl.push_back(posLit(1)); cl.push_back(posLit(2));
 		pre.addClause(cl);
 		opts.satPre.disableBce();
-		opts.satPre.mode = SatPreParams::prepro_preserve_sat;
 		pre.preprocess(ctx, opts.satPre);
 		CPPUNIT_ASSERT(0u == ctx.numConstraints());
 		CPPUNIT_ASSERT(ctx.eliminated(1) == true);
@@ -151,7 +150,7 @@ public:
 		LitVec cl;
 		cl.push_back(posLit(1)); cl.push_back(posLit(2));
 		pre.addClause(cl);
-		opts.satPre.mode = SatPreParams::prepro_preserve_models;
+		ctx.setPreserveModels(true);
 		pre.preprocess(ctx, opts.satPre);
 		CPPUNIT_ASSERT(1u == ctx.numConstraints());
 		CPPUNIT_ASSERT(ctx.eliminated(1) == false);
@@ -159,12 +158,12 @@ public:
 	
 	void testExtendModel() {
 		SharedContext ctx2; 
+		ctx2.setPreserveModels(true);
 		opts.satPre.disableBce();
-		opts.satPre.mode = SatPreParams::prepro_preserve_models;
-		ctx2.setConfiguration(&opts, false);
-		ctx2.addVar(Var_t::atom_var);
-		ctx2.addVar(Var_t::atom_var);
-		ctx2.addVar(Var_t::atom_var);
+		ctx2.setConfiguration(&opts, Ownership_t::Retain);
+		ctx2.addVar(Var_t::Atom);
+		ctx2.addVar(Var_t::Atom);
+		ctx2.addVar(Var_t::Atom);
 		ctx2.startAddConstraints();
 		ClauseCreator nc(ctx2.master());
 		nc.start().add(negLit(1)).add(posLit(2)).end();
@@ -183,13 +182,13 @@ public:
 
 	void testExtendModel2() {
 		SharedContext ctx2; 
+		ctx2.setPreserveModels(true);
 		opts.satPre.disableBce();
-		opts.satPre.mode = SatPreParams::prepro_preserve_models;
-		ctx2.setConfiguration(&opts, false);
-		ctx2.addVar(Var_t::atom_var);
-		ctx2.addVar(Var_t::atom_var);
-		ctx2.addVar(Var_t::atom_var);
-		ctx2.addVar(Var_t::atom_var);
+		ctx2.setConfiguration(&opts, Ownership_t::Retain);
+		ctx2.addVar(Var_t::Atom);
+		ctx2.addVar(Var_t::Atom);
+		ctx2.addVar(Var_t::Atom);
+		ctx2.addVar(Var_t::Atom);
 		ctx2.startAddConstraints();
 		ClauseCreator nc(ctx2.master());
 	
@@ -211,9 +210,9 @@ public:
 		CPPUNIT_ASSERT(n == 4);
 	}
 private:
-	SharedContext       ctx;
-	SatElite::SatElite	pre;
-	BasicSatConfig      opts;
+	SharedContext  ctx;
+	SatElite	     pre;
+	BasicSatConfig opts;
 };
 CPPUNIT_TEST_SUITE_REGISTRATION(SatEliteTest);
 } } 

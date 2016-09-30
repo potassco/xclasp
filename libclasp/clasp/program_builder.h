@@ -1,18 +1,18 @@
-// 
-// Copyright (c) 2006, 2007, 2012, 2013 Benjamin Kaufmann
-// 
-// This file is part of Clasp. See http://www.cs.uni-potsdam.de/clasp/ 
-// 
+//
+// Copyright (c) 2006-2015 Benjamin Kaufmann
+//
+// This file is part of Clasp. See http://www.cs.uni-potsdam.de/clasp/
+//
 // Clasp is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation; either version 2 of the License, or
 // (at your option) any later version.
-// 
+//
 // Clasp is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
-// 
+//
 // You should have received a copy of the GNU General Public License
 // along with Clasp; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
@@ -25,17 +25,19 @@
 #pragma once
 #endif
 
-#include <clasp/literal.h>
 #include <clasp/claspfwd.h>
+#include <clasp/literal.h>
 #include <clasp/util/misc_types.h>
-#include <map>
+#include <clasp/util/hash_map.h>
+#include <potassco/basic_types.h>
 #include <iosfwd>
 
 namespace Clasp {
 
 /**
- * \defgroup problem Problem specification
- * Classes and functions for defining input programs.
+ * \file
+ * \defgroup problem Input
+ * \brief Classes and functions for defining input programs.
  */
 //@{
 
@@ -44,9 +46,10 @@ class ProgramBuilder {
 public:
 	typedef SharedMinimizeData SharedMinimize;
 	typedef SingleOwnerPtr<SharedMinimize, ReleaseObject> MinPtr;
+
 	ProgramBuilder();
 	virtual ~ProgramBuilder();
-	//! Starts the definition of a program. 
+	//! Starts the definition of a program.
 	/*!
 	 * This function shall be called exactly once before a new program is defined.
 	 * It discards any previously added program.
@@ -55,7 +58,6 @@ public:
 	 */
 	bool startProgram(SharedContext& ctx);
 	//! Parses the given stream as a program of type() and adds it to this object.
-	bool parseProgram(StreamSource& prg);
 	bool parseProgram(std::istream& prg);
 	//! Unfreezes a currently frozen program.
 	bool updateProgram();
@@ -66,15 +68,9 @@ public:
 	 * \pre frozen()
 	 */
 	void             getAssumptions(LitVec& out) const;
-	//! Returns an optimized representation of the program's minimize statements (if any).
-	/*!
-	 * \note The returned object is owned by the program, hence callers have to
-	 * call share() if the minimize constraint is to be used independently from it.
-	 */
-	SharedMinimize*  getMinimizeConstraint(SumVec* softBound = 0) const;
-	//! Removes a previously created minimize constraint.
-	void             disposeMinimizeConstraint();
-	//! Returns the type of program that is created by this builder. 
+	//! Returns bounds that shall hold during minimization.
+	void             getWeakBounds(SumVec& out)  const;
+	//! Returns the type of program that is created by this builder.
 	int              type()   const { return doType(); }
 	//! Returns true if the program is currently frozen.
 	bool             frozen() const { return frozen_; }
@@ -82,27 +78,28 @@ public:
 	virtual bool     ok()     const;
 	//! Returns the stored context object.
 	SharedContext*   ctx()    const { return ctx_; }
+	//! Returns a parser for this type of program associated with this object.
+	ProgramParser&   parser();
 protected:
-	void addMinLit(WeightLiteral x);
-	void addMinRule(const WeightLitVec& lits);
-	void disposeMin();
+	void addMinLit(weight_t prio, WeightLiteral x);
 	void setFrozen(bool frozen)  { frozen_ = frozen; }
 	void setCtx(SharedContext* x){ ctx_    = x; }
+	void markOutputVariables() const;
 private:
 	typedef SingleOwnerPtr<MinimizeBuilder> MinBuildPtr;
+	typedef SingleOwnerPtr<ProgramParser>   ParserPtr;
 	ProgramBuilder(const ProgramBuilder&);
 	ProgramBuilder& operator=(ProgramBuilder&);
-	virtual void getMinBound(SumVec& out)      const;
 	virtual bool doStartProgram()                    = 0;
 	virtual bool doUpdateProgram()                   = 0;
 	virtual bool doEndProgram()                      = 0;
+	virtual void doGetWeakBounds(SumVec& out)  const;
 	virtual void doGetAssumptions(LitVec& out) const = 0;
 	virtual int  doType() const                      = 0;
-	virtual bool doParse(StreamSource& prg)          = 0;
-	SharedContext*      ctx_;
-	mutable MinBuildPtr min_;
-	mutable MinPtr      minCon_;
-	bool                frozen_;
+	virtual ProgramParser* doCreateParser()          = 0;
+	SharedContext* ctx_;
+	ParserPtr      parser_;
+	bool           frozen_;
 };
 
 //! A class for defining a SAT-problem in CNF.
@@ -136,20 +133,26 @@ public:
 	 * \param cw     The weight associated with the clause.
 	 */
 	bool addClause(LitVec& clause, wsum_t cw = 0);
+	//! Adds min as an objective function to the problem.
+	bool addObjective(const WeightLitVec& min);
+	//! Adds v to the set of projection vars.
+	void addProject(Var v);
+	//! Adds x to the set of initial assumptions.
+	void addAssumption(Literal x);
 private:
 	typedef PodVector<uint8>::type VarState;
 	bool doStartProgram();
-	//! Parses prg as a SAT-problem in DIMACS-format.
-	bool doParse(StreamSource& prg);
-	int  doType() const                   { return Problem_t::SAT; }
-	bool doUpdateProgram()                { return !frozen(); }
-	void doGetAssumptions(LitVec&) const  { }
+	ProgramParser* doCreateParser();
+	int  doType() const                    { return Problem_t::Sat; }
+	bool doUpdateProgram()                 { return !frozen(); }
+	void doGetAssumptions(LitVec& a) const { a.insert(a.end(), assume_.begin(), assume_.end()); }
 	bool doEndProgram();
 	bool satisfied(LitVec& clause);
 	bool markAssigned();
 	void markLit(Literal x) { varState_[x.var()] |= 1 + x.sign(); }
 	VarState varState_;
 	LitVec   softClauses_;
+	LitVec   assume_;
 	wsum_t   hardWeight_;
 	Var      vars_;
 	uint32   pos_;
@@ -170,11 +173,11 @@ public:
 	 */
 	void    prepareProblem(uint32 numVars, uint32 maxProduct, uint32 maxSoft, uint32 constraintHint = 100);
 	//! Returns the number of variables in the problem.
-	uint32  numVars() const { return nextVar_; }
+	uint32  numVars() const { return auxVar_ - 1; }
 	//! Adds the given PB-constraint to the problem.
 	/*!
-	 * A PB-constraint onsists of a list of weighted Boolean literals (lhs),
-	 * a comparison operator (either >= or =), and an integer bound (rhs). 
+	 * A PB-constraint consists of a list of weighted Boolean literals (lhs),
+	 * a comparison operator (either >= or =), and an integer bound (rhs).
 	 *
 	 * \pre v <= numVars(), for all variables v occuring in lits.
 	 * \pre bound >= 0 && cw >= 0.
@@ -194,26 +197,52 @@ public:
 	Literal addProduct(LitVec& lits);
 	//! Adds min as an objective function to the problem.
 	bool    addObjective(const WeightLitVec& min);
+	//! Adds v to the set of projection vars.
+	void    addProject(Var v);
+	//! Adds x to the set of initial assumptions.
+	void    addAssumption(Literal x);
 	//! Only allow solutions where the sum of violated soft constraint is less than bound.
 	bool    setSoftBound(wsum_t bound);
 private:
-	typedef std::map<LitVec, Literal> ProductIndex;
+	struct PKey {
+		LitVec lits;
+		std::size_t operator()(const PKey& k)                    const { return k.lits[0].rep(); }
+		bool        operator()(const PKey& lhs, const PKey& rhs) const { return lhs.lits == rhs.lits; }
+	};
+	typedef Clasp::HashMap_t<PKey, Literal, PKey, PKey>::map_type ProductIndex;
 	bool doStartProgram();
-	void getMinBound(SumVec& out) const;
-	int  doType() const                   { return Problem_t::PB; }
-	bool doUpdateProgram()                { return !frozen(); }
-	void doGetAssumptions(LitVec&) const  { }
-	//! Parses prg as a PB-problem in OPB-format.
-	bool doParse(StreamSource& prg);
+	void doGetWeakBounds(SumVec& out) const;
+	int  doType() const                    { return Problem_t::Pb; }
+	bool doUpdateProgram()                 { return !frozen(); }
+	void doGetAssumptions(LitVec& a) const { a.insert(a.end(), assume_.begin(), assume_.end()); }
+	ProgramParser* doCreateParser();
 	bool doEndProgram();
-	bool productSubsumed(LitVec& lits, Literal& subLit);
+	bool productSubsumed(LitVec& lits, PKey& prod);
 	void addProductConstraints(Literal eqLit, LitVec& lits);
-	Var  getNextVar();
+	Var  getAuxVar();
 	ProductIndex products_;
-	uint32       nextVar_;
-	uint32       maxVar_;
+	PKey         prod_;
+	LitVec       assume_;
+	uint32       auxVar_;
+	uint32       endVar_;
 	wsum_t       soft_;
 };
+
+//! Adapts a Sat or PB builder to the Potassco::AbstractProgram interface.
+class BasicProgramAdapter : public Potassco::AbstractProgram {
+public:
+	BasicProgramAdapter(ProgramBuilder& prg);
+	void initProgram(bool inc);
+	void beginStep();
+	void rule(Potassco::Head_t ht, const Potassco::AtomSpan& head, const Potassco::LitSpan& body);
+	void rule(Potassco::Head_t ht, const Potassco::AtomSpan& head, Potassco::Weight_t bound, const Potassco::WeightLitSpan& body);
+	void minimize(Potassco::Weight_t prio, const Potassco::WeightLitSpan& lits);
+protected:
+	ProgramBuilder* prg_;
+	LitVec          clause_;
+	WeightLitVec    constraint_;
+	bool            inc_;
+};
+
 }
 #endif
-

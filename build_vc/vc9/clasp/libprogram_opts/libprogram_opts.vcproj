@@ -142,7 +142,7 @@
 			/>
 		</Configuration>
 		<Configuration
-			Name="Release_MT_Static|Win32"
+			Name="Release_Static|Win32"
 			OutputDirectory="$(SolutionDir)$(ConfigurationName)"
 			IntermediateDirectory="$(ConfigurationName)"
 			ConfigurationType="4"

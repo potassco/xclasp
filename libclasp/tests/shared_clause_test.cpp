@@ -43,16 +43,17 @@ class SharedClauseTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testCloneShared);
 	CPPUNIT_TEST_SUITE_END(); 
 public:
+	typedef ConstraintInfo ClauseInfo;
 	SharedClauseTest() {
-		a1 = posLit(ctx.addVar(Var_t::atom_var));
-		a2 = posLit(ctx.addVar(Var_t::atom_var));
-		a3 = posLit(ctx.addVar(Var_t::atom_var));
-		b1 = posLit(ctx.addVar(Var_t::body_var));
-		b2 = posLit(ctx.addVar(Var_t::body_var));
-		b3 = posLit(ctx.addVar(Var_t::body_var));
+		a1 = posLit(ctx.addVar(Var_t::Atom));
+		a2 = posLit(ctx.addVar(Var_t::Atom));
+		a3 = posLit(ctx.addVar(Var_t::Atom));
+		b1 = posLit(ctx.addVar(Var_t::Body));
+		b2 = posLit(ctx.addVar(Var_t::Body));
+		b3 = posLit(ctx.addVar(Var_t::Body));
 
 		for (int i = 6; i < 15; ++i) {
-			ctx.addVar(Var_t::atom_var);
+			ctx.addVar(Var_t::Atom);
 		}
 		ctx.startAddConstraints(10);
 	}
@@ -72,7 +73,7 @@ public:
 	void testPropRandomClauses() {
 		for (int i = 0; i != 100; ++i) {
 			SharedContext cc;
-			for (int j = 0; j < 12; ++j) { cc.addVar(Var_t::atom_var); }
+			for (int j = 0; j < 12; ++j) { cc.addVar(Var_t::Atom); }
 			cc.startAddConstraints(1);
 			
 			makeRandomClause( (rand() % 10) + 2 );
@@ -103,7 +104,7 @@ public:
 	void testReasonBumpsActivityIfLearnt() {
 		makeLits(4, 0);
 		ctx.endInit();
-		ClauseInfo e(Constraint_t::learnt_conflict);
+		ClauseInfo e(Constraint_t::Conflict);
 		ClauseHead* c = createShared(ctx, clLits, e);
 		Solver& solver= *ctx.master();
 		solver.addLearnt(c, (uint32)clLits.size());
@@ -112,13 +113,10 @@ public:
 		solver.propagate();
 		solver.assume(~clLits[1]);
 		solver.propagate();
-		solver.assume(~clLits[2]);
-		solver.propagate();
-		
-		CPPUNIT_ASSERT_EQUAL(true, solver.isTrue( clLits[3] ) );
 		uint32 a = c->activity().activity();
-		LitVec r;
-		solver.reason(clLits[3], r);
+		solver.assume(~clLits[2]);
+		solver.force(~clLits[3], Antecedent(0));
+		CPPUNIT_ASSERT_EQUAL(false, solver.propagate());
 		CPPUNIT_ASSERT_EQUAL(a+1, c->activity().activity());
 	}
 
@@ -150,8 +148,8 @@ public:
 
 	void testSimplifyShared() {
 		makeLits(3, 3);
-		SharedLiterals* sLits   = SharedLiterals::newShareable(clLits, Constraint_t::learnt_conflict);
-		CPPUNIT_ASSERT(sLits->unique() && sLits->type() == Constraint_t::learnt_conflict && sLits->size() == 6);
+		SharedLiterals* sLits   = SharedLiterals::newShareable(clLits, Constraint_t::Conflict);
+		CPPUNIT_ASSERT(sLits->unique() && sLits->type() == Constraint_t::Conflict && sLits->size() == 6);
 		SharedLiterals* other   = sLits->share();
 		CPPUNIT_ASSERT(!sLits->unique());
 		
@@ -168,7 +166,7 @@ public:
 	void testCloneShared() {
 		makeLits(3, 2);
 		ClauseHead* c = createShared(ctx, clLits, ClauseInfo());
-		Solver& solver2 = ctx.addSolver();
+		Solver& solver2 = ctx.pushSolver();
 		ctx.endInit(true);
 		ClauseHead* clone = (ClauseHead*)c->cloneAttach(solver2);
 		LitVec lits;

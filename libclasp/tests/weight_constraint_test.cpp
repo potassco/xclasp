@@ -80,13 +80,13 @@ class WeightConstraintTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST_SUITE_END(); 
 public:
 	WeightConstraintTest() {
-		body  = posLit(ctx.addVar(Var_t::body_var));
-		a     = posLit(ctx.addVar(Var_t::atom_var));
-		b     = posLit(ctx.addVar(Var_t::atom_var));
-		c     = posLit(ctx.addVar(Var_t::atom_var));
-		d     = posLit(ctx.addVar(Var_t::atom_var));
-		e     = posLit(ctx.addVar(Var_t::atom_var));
-		f     = posLit(ctx.addVar(Var_t::atom_var));
+		body  = posLit(ctx.addVar(Var_t::Body));
+		a     = posLit(ctx.addVar(Var_t::Atom));
+		b     = posLit(ctx.addVar(Var_t::Atom));
+		c     = posLit(ctx.addVar(Var_t::Atom));
+		d     = posLit(ctx.addVar(Var_t::Atom));
+		e     = posLit(ctx.addVar(Var_t::Atom));
+		f     = posLit(ctx.addVar(Var_t::Atom));
 		ctx.startAddConstraints(10);
 	}
 	Solver& solver() { return *ctx.master(); }
@@ -591,7 +591,7 @@ public:
 		WeightLitVec lits = makeWeightLits();
 		CPPUNIT_ASSERT_EQUAL(true, newWeightConstraint(ctx, body, lits, 3));
 		solver().force(~a, 0);
-		Solver& solver2 = ctx.addSolver();
+		Solver& solver2 = ctx.pushSolver();
 		ctx.endInit(true);
 		
 		CPPUNIT_ASSERT(solver2.numConstraints() == 1);
@@ -619,7 +619,7 @@ public:
 		WeightLitVec lits = makeWeightLits();
 		CPPUNIT_ASSERT_EQUAL(true, newWeightConstraint(ctx, body, lits, 3));
 		solver().force(~a, 0);
-		Solver& solver2 = ctx.addSolver();
+		Solver& solver2 = ctx.pushSolver();
 		ctx.endInit(true);
 		
 		CPPUNIT_ASSERT(solver2.numConstraints() == 1);

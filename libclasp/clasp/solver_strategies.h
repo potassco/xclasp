@@ -1,5 +1,5 @@
 // 
-// Copyright (c) 2006-2012, Benjamin Kaufmann
+// Copyright (c) 2006-2016, Benjamin Kaufmann
 // 
 // This file is part of Clasp. See http://www.cs.uni-potsdam.de/clasp/ 
 // 
@@ -28,10 +28,9 @@
 
 /*!
  * \file 
- * Contains strategies and options used to configure solvers and search.
+ * \brief Contains strategies and options used to configure solvers and search.
  */
 namespace Clasp {
-
 //! Implements clasp's configurable schedule-strategies.
 /*!
  * clasp currently supports the following basic strategies:
@@ -41,8 +40,8 @@ namespace Clasp {
  *  - luby's sequence     : X = n1 * luby(k)(k >= 0) 
  *  .
  * Furthermore, an inner-outer scheme can be applied to the selected sequence.
- * In that case, the sequence is repeated every <limit>+j restarts, where
- * <limit> is the initial outer-limit and j is the number of times the
+ * In that case, the sequence is repeated every \<limit\>+j restarts, where
+ * \<limit\> is the initial outer-limit and j is the number of times the
  * sequence was already repeated.
  *
  * \note For luby's seqeuence, j is not a repetition counter
@@ -53,22 +52,23 @@ namespace Clasp {
  */
 struct ScheduleStrategy {
 public:
-	enum Type { geometric_schedule = 0, arithmetic_schedule = 1, luby_schedule = 2, user_schedule = 3 }; 
+	//! Supported strategies.
+	enum Type { Geometric = 0, Arithmetic = 1, Luby = 2, User = 3 }; 
 	
-	ScheduleStrategy(Type t = geometric_schedule, uint32 b = 100, double g = 1.5, uint32 o = 0);
+	ScheduleStrategy(Type t = Geometric, uint32 b = 100, double g = 1.5, uint32 o = 0);
 	//! Creates luby's sequence with unit-length unit and optional outer limit.
-	static ScheduleStrategy luby(uint32 unit, uint32 limit = 0)              { return ScheduleStrategy(luby_schedule, unit, 0, limit);  }
+	static ScheduleStrategy luby(uint32 unit, uint32 limit = 0)              { return ScheduleStrategy(Luby, unit, 0, limit);  }
 	//! Creates geometric sequence base * (grow^k) with optional outer limit.
-	static ScheduleStrategy geom(uint32 base, double grow, uint32 limit = 0) { return ScheduleStrategy(geometric_schedule, base, grow, limit);  }
+	static ScheduleStrategy geom(uint32 base, double grow, uint32 limit = 0) { return ScheduleStrategy(Geometric, base, grow, limit);  }
 	//! Creates arithmetic sequence base + (add*k) with optional outer limit.
-	static ScheduleStrategy arith(uint32 base, double add, uint32 limit = 0) { return ScheduleStrategy(arithmetic_schedule, base, add, limit);  }
+	static ScheduleStrategy arith(uint32 base, double add, uint32 limit = 0) { return ScheduleStrategy(Arithmetic, base, add, limit);  }
 	//! Creates fixed sequence with length base.
-	static ScheduleStrategy fixed(uint32 base)                               { return ScheduleStrategy(arithmetic_schedule, base, 0, 0);  }
-	static ScheduleStrategy none()                                           { return ScheduleStrategy(geometric_schedule, 0); }
-	static ScheduleStrategy def()                                            { return ScheduleStrategy(user_schedule, 0, 0.0); }
+	static ScheduleStrategy fixed(uint32 base)                               { return ScheduleStrategy(Arithmetic, base, 0, 0);  }
+	static ScheduleStrategy none()                                           { return ScheduleStrategy(Geometric, 0); }
+	static ScheduleStrategy def()                                            { return ScheduleStrategy(User, 0, 0.0); }
 	uint64 current()  const;
 	bool   disabled() const { return base == 0; }
-	bool   defaulted()const { return base == 0 && type == user_schedule; }
+	bool   defaulted()const { return base == 0 && type == User; }
 	void   reset()          { idx  = 0;         }
 	uint64 next();
 	void   advanceTo(uint32 idx);
@@ -78,55 +78,50 @@ public:
 	uint32 len;       // length of sequence (0 if infinite) (once reached, sequence is repeated and len increased)
 	float  grow;      // update parameter n2
 };
-
+//! Returns the idx'th value of the luby sequence.
 uint32 lubyR(uint32 idx);
+//! Returns the idx'th value of the geometric sequence with the given growth factor.
 double growR(uint32 idx, double g);
+//! Returns the idx'th value of the arithmetic sequence with the given addend.
 double addR(uint32 idx, double a);
-inline uint32 log2(uint32 x) {
-	uint32 ln = 0;
-	if (x & 0xFFFF0000u) { x >>= 16; ln |= 16; }
-	if (x & 0xFF00u    ) { x >>=  8; ln |=  8; }
-	if (x & 0xF0u      ) { x >>=  4; ln |=  4; }
-	if (x & 0xCu       ) { x >>=  2; ln |=  2; }
-	if (x & 0x2u       ) {/*x>>=1*/; ln |=  1; }
-	return ln;
-}
 
 class DecisionHeuristic;
-
+//! Parameter-Object for grouping solver strategies.
 struct SolverStrategies {
 	//! Clasp's two general search strategies.
 	enum SearchStrategy {
-		use_learning = 0, /*!< Analyze conflicts and learn First-1-UIP-clause */
-		no_learning  = 1  /*!< Don't analyze conflicts - chronological backtracking */
+		use_learning = 0, //!< Analyze conflicts and learn First-1-UIP-clause.
+		no_learning  = 1  //!< Don't analyze conflicts - chronological backtracking.
 	};
 	//! Default sign heuristic.
 	enum SignHeu {
-		sign_atom = 0, /*!< Prefer negative literal for atoms.                   */
-		sign_pos  = 1, /*!< Always prefer positive literal.                      */
-		sign_neg  = 2, /*!< Always prefer negative literal.                      */
-		sign_rnd  = 3, /*!< Prefer random literal.                               */
-		sign_disj = 4, /*!< Prefer negative literal for atoms in hcf-components. */
+		sign_atom = 0, //!< Prefer negative literal for atoms.
+		sign_pos  = 1, //!< Prefer positive literal.
+		sign_neg  = 2, //!< Prefer negative literal.
+		sign_rnd  = 3, //!< Prefer random literal.
 	};
+	//! Conflict clause minimization strategy.
 	enum CCMinType {
-		cc_local     = 0,
-		cc_recursive = 1,
+		cc_local     = 0, //!< Basic algorithm.
+		cc_recursive = 1, //!< Extended algorithm.
 	};
 	//! Antecedents to consider during conflict clause minimization.
 	enum CCMinAntes {
-		no_antes     = 0,  /*!< Don't minimize first-uip-clauses. */
-		all_antes    = 1,  /*!< Consider all antecedents.         */
-		short_antes  = 2,  /*!< Consider only short antecedents.  */
-		binary_antes = 3,  /*!< Consider only binary antecedents. */
+		no_antes     = 0,  //!< Don't minimize conflict clauses.
+		all_antes    = 1,  //!< Consider all antecedents.
+		short_antes  = 2,  //!< Consider only short antecedents.
+		binary_antes = 3,  //!< Consider only binary antecedents.
 	};
 	//! Simplifications for long conflict clauses.
 	enum CCRepMode {
-		cc_no_replace  = 0,/*!< Don't replace literals in conflict clauses. */
-		cc_rep_decision= 1,/*!< Replace conflict clause with decision sequence. */
-		cc_rep_uip     = 2,/*!< Replace conflict clause with all uip clause. */
-		cc_rep_dynamic = 3,/*!< Dynamically select between cc_rep_decision and cc_rep_uip. */
+		cc_no_replace  = 0,//!< Don't replace literals in conflict clauses.
+		cc_rep_decision= 1,//!< Replace conflict clause with decision sequence.
+		cc_rep_uip     = 2,//!< Replace conflict clause with all uip clause.
+		cc_rep_dynamic = 3,//!< Dynamically select between cc_rep_decision and cc_rep_uip.
 	};
+	//! Strategy for initializing watched literals in clauses.
 	enum WatchInit  { watch_first = 0, watch_rand = 1, watch_least = 2 };
+	//! Strategy for integrating new information in parallel solving.
 	enum UpdateMode { update_on_propagate = 0, update_on_conflict  = 1 };
 
 	SolverStrategies();
@@ -135,23 +130,55 @@ struct SolverStrategies {
 	uint32    compress      : 16; /*!< If > 0, enable compression for learnt clauses of size > compress. */
 	uint32    saveProgress  : 16; /*!< Enable progress saving if > 0. */
 	//----- 32 bit ------------
+	uint32    heuId         : 3;  /*!< Type of decision heuristic.   */
 	uint32    reverseArcs   : 2;  /*!< Use "reverse-arcs" during learning if > 0. */
 	uint32    otfs          : 2;  /*!< Enable "on-the-fly" subsumption if > 0. */
 	uint32    updateLbd     : 2;  /*!< Update lbds of antecedents during conflict analysis. */
 	uint32    ccMinAntes    : 2;  /*!< Antecedents to look at during conflict clause minimization. */
 	uint32    ccRepMode     : 2;  /*!< One of CCRepMode. */
 	uint32    ccMinRec      : 1;  /*!< If 1, use more expensive recursive nogood minimization.  */
+	uint32    ccMinKeepAct  : 1;  /*!< Do not increase nogood activities during nogood minimization? */
 	uint32    initWatches   : 2;  /*!< Initialize watches randomly in clauses. */
 	uint32    upMode        : 1;  /*!< One of UpdateMode. */
 	uint32    bumpVarAct    : 1;  /*!< Bump activities of vars implied by learnt clauses with small lbd. */
 	uint32    search        : 1;  /*!< Current search strategy. */
 	uint32    restartOnModel: 1;  /*!< Do a restart after each model. */
-	uint32    signDef       : 3;  /*!< Default sign heuristic.        */
+	uint32    signDef       : 2;  /*!< Default sign heuristic.        */
 	uint32    signFix       : 1;  /*!< Disable all sign heuristics and always use default sign. */
-	uint32    hasConfig     : 1;  // config applied to solver?
-	uint32    id            : 6;  // Solver id - SHALL ONLY BE SET BY Shared Context!
-	uint32    heuReserved   : 3;  // id of active heuristic - SHALL ONLY BE SET BY Solver!
 	uint32    reserved      : 1;
+	uint32    hasConfig     : 1;  /*!< Config applied to solver? */
+	uint32    id            : 6;  /*!< Solver id - SHALL ONLY BE SET BY Shared Context! */
+};
+//! Parameter-Object for grouping additional heuristic options.
+struct HeuParams {
+	//! Strategy for scoring clauses not learnt by conflict analysis.
+	enum ScoreOther { other_no   = 0u, other_loop = 1u, other_all = 2u, other_auto = 3u };
+	//! Strategy for scoring during conflict analysis.
+	enum Score      { score_auto = 0u, score_min  = 1u, score_set = 2u, score_multi_set = 3u };
+	//! Global preference for domain heuristic.
+	enum DomPref    { pref_atom  = 0u, pref_scc   = 1u, pref_hcc  = 2u, pref_disj = 4u, pref_min  = 8u, pref_show = 16u };
+	//! Global modification for domain heuristic.
+	enum DomMod     { mod_none   = 0u, mod_level  = 1u, mod_spos  = 2u, mod_true  = 3u, mod_sneg  = 4u, mod_false = 5u, mod_init = 6u, mod_factor = 7u };
+	//! Values for dynamic decaying scheme.
+	struct VsidsDecay {
+		uint32 init: 10; /*!< Starting decay factor: 1/0.\<init\>. */
+		uint32 bump:  7; /*!< Decay decrease value : \<bump\>/100. */
+		uint32 freq: 15; /*!< Update decay factor every \<freq\> conflicts. */
+	};
+	HeuParams();
+	uint32 param    : 16; /*!< Extra parameter for heuristic with meaning depending on type. */
+	uint32 score    : 2;  /*!< Type of scoring during resolution. */
+	uint32 other    : 2;  /*!< Consider other learnt nogoods in heuristic. */
+	uint32 moms     : 1;  /*!< Use MOMS-score as top-level heuristic. */
+	uint32 nant     : 1;  /*!< Prefer elements in NegAnte(P).      */
+	uint32 huang    : 1;  /*!< Only for Berkmin.   */
+	uint32 acids    : 1;  /*!< Only for Vsids/Dom. */
+	uint32 domPref  : 5;  /*!< Default pref for doamin heuristic (set of DomPref). */
+	uint32 domMod   : 3;  /*!< Default mod for domain heuristic (one of DomMod). */
+	union {
+		uint32     extra;
+		VsidsDecay decay; /*!< Only for Vsids/Dom. */
+	};
 };
 
 //! Parameter-Object for configuring a solver.
@@ -162,25 +189,18 @@ struct SolverParams : SolverStrategies  {
 	inline bool forgetSigns()     const { return (forgetSet & 2u) != 0; }
 	inline bool forgetActivities()const { return (forgetSet & 4u) != 0; }
 	inline bool forgetLearnts()   const { return (forgetSet & 8u) != 0; }
-	uint32 seed;           /*!< Seed for the random number generator.                        */ 
-	// 32-bit
-	uint32 heuParam  : 16; /*!< Extra parameter for heuristic with meaning depending on type */
+	SolverParams& setId(uint32 id)      { this->id = id; return *this; }
+	HeuParams heuristic;  /*!< Parameters for decision heuristic.     */
+	// 64-bit
+	uint32 seed;           /*!< Seed for the random number generator.  */
 	uint32 lookOps   : 16; /*!< Max. number of lookahead operations (0: no limit).           */
-	// 32-bit
 	uint32 optStrat  : 1;  /*!< Optimization strategy (see MinimizeMode_t::Strategy).*/
-	uint32 optParam  : 3;  /*!< Parameter for optimization strategy (see MinimizeMode_t::BBOption / MinimizeMode_t::UscOption). */
+	uint32 optParam  : 4;  /*!< Parameter for optimization strategy (see MinimizeMode_t::BBOption / MinimizeMode_t::UscOption). */
 	uint32 optHeu    : 2;  /*!< Set of optimize heuristics. */
-	uint32 heuId     : 3;  /*!< Type of decision heuristic.   */
-	uint32 heuScore  : 2;  /*!< Type of scoring during resolution. */ 
-	uint32 heuOther  : 2;  /*!< Consider other learnt nogoods in heuristic (0=no, 1=loops, 2=all, 3=let heuristic decide). */
-	uint32 heuMoms   : 1;  /*!< Use MOMS-score as top-level heuristic. */
-	uint32 berkHuang : 1;  /*!< Only for Berkmin. */
-	uint32 unitNant  : 1;  /*!< Only for unit.    */
 	uint32 lookType  : 2;  /*!< Type of lookahead operations. */
 	uint32 loopRep   : 2;  /*!< How to represent loops? */
+	uint32 acycFwd   : 1;  /*!< Disable backward propagation in acyclicity checker. */
 	uint32 forgetSet : 4;  /*!< What to forget on (incremental step). */ 
-	uint32 domPref   : 5;  /*!< Only for domain heuristic. */
-	uint32 domMod    : 3;  /*!< Only for domain heuristic. */
 };
 
 typedef Range<uint32> Range32;
@@ -190,7 +210,7 @@ typedef Range<uint32> Range32;
  * \see ScheduleStrategy
  */
 struct RestartParams {
-	RestartParams() : sched(), counterRestart(0), counterBump(9973), shuffle(0), shuffleNext(0), upRestart(0), cntLocal(0), dynRestart(0) {}
+	RestartParams() : sched(), blockScale(1.4f), blockWindow(0), blockFirst(0), counterRestart(0), counterBump(9973), shuffle(0), shuffleNext(0), upRestart(0), cntLocal(0), dynRestart(0) {}
 	enum SeqUpdate { seq_continue = 0, seq_repeat = 1, seq_disable = 2 };
 	uint32    prepare(bool withLookback);
 	void      disable();
@@ -198,6 +218,9 @@ struct RestartParams {
 	bool      local()   const { return cntLocal   != 0; }
 	SeqUpdate update()  const { return static_cast<SeqUpdate>(upRestart); }
 	ScheduleStrategy sched;  /**< Restart schedule to use. */
+	float  blockScale;       /**< Scaling factor for blocking restarts. */
+	uint32 blockWindow: 16;  /**< Size of moving assignment average for blocking restarts (0: disable). */
+	uint32 blockFirst : 16;  /**< Enable blocking restarts after blockFirst conflicts. */
 	uint32 counterRestart:16;/**< Apply counter implication bump every counterRestart restarts (0: disable). */
 	uint32 counterBump:16;   /**< Bump factor for counter implication restarts. */
 	uint32 shuffle    :14;   /**< Shuffle program after shuffle restarts (0: disable). */
@@ -215,39 +238,43 @@ struct RestartParams {
 struct ReduceStrategy {
 	//! Reduction algorithm to use during solving.
 	enum Algorithm {
-		reduce_linear   = 0, /*!< Linear algorithm from clasp-1.3.x. */
-		reduce_stable   = 1, /*!< Sort constraints by score but keep order in learnt db. */
-		reduce_sort     = 2, /*!< Sort learnt db by score and remove fraction with lowest score. */
-		reduce_heap     = 3  /*!< Similar to reduce_sort but only partially sorts learnt db.  */
+		reduce_linear = 0, //!< Linear algorithm from clasp-1.3.x.
+		reduce_stable = 1, //!< Sort constraints by score but keep order in learnt db.
+		reduce_sort   = 2, //!< Sort learnt db by score and remove fraction with lowest score.
+		reduce_heap   = 3  //!< Similar to reduce_sort but only partially sorts learnt db.
 	};
 	//! Score to measure "activity" of learnt constraints.
 	enum Score {
-		score_act  = 0, /*!< Activity only: how often constraint is used during conflict analysis. */
-		score_lbd  = 1, /*!< Use literal block distance as activity. */
-		score_both = 2  /*!< Use activity and lbd together. */
+		score_act  = 0, //!< Activity only: how often constraint is used during conflict analysis.
+		score_lbd  = 1, //!< Use literal block distance as activity.
+		score_both = 2  //!< Use activity and lbd together.
 	};
+	//! Strategy for estimating size of problem.
 	enum EstimateSize {
-		est_dynamic         = 0,
-		est_con_complexity  = 1,
-		est_num_constraints = 2,
-		est_num_vars        = 3
+		est_dynamic         = 0, //!< Dynamically decide whether to use number of variables or constraints.
+		est_con_complexity  = 1, //!< Measure size in terms of constraint complexities.
+		est_num_constraints = 2, //!< Measure size in terms of number constraints.
+		est_num_vars        = 3  //!< Measure size in terms of number variable.
 	};
-	static uint32 scoreAct(const Activity& act)  { return act.activity(); }
-	static uint32 scoreLbd(const Activity& act)  { return uint32(128)-act.lbd(); }
-	static uint32 scoreBoth(const Activity& act) { return (act.activity()+1) * scoreLbd(act); }
-	ReduceStrategy() : glue(0), fReduce(75), fRestart(0), score(0), algo(0), estimate(0), noGlue(0) {}
-	static int    compare(Score sc, const Clasp::Activity& lhs, const Clasp::Activity& rhs) {
+	static uint32 scoreAct(const ConstraintScore& sc)  { return sc.activity(); }
+	static uint32 scoreLbd(const ConstraintScore& sc)  { return uint32(LBD_MAX+1)-sc.lbd(); }
+	static uint32 scoreBoth(const ConstraintScore& sc) { return (sc.activity()+1) * scoreLbd(sc); }
+	static int    compare(Score sc, const ConstraintScore& lhs, const ConstraintScore& rhs) {
 		int fs = 0;
 		if      (sc == score_act) { fs = ((int)scoreAct(lhs)) - ((int)scoreAct(rhs)); }
 		else if (sc == score_lbd) { fs = ((int)scoreLbd(lhs)) - ((int)scoreLbd(rhs)); }
 		return fs != 0 ? fs : ((int)scoreBoth(lhs)) - ((int)scoreBoth(rhs)); 
 	}
-	static uint32 asScore(Score sc, const Clasp::Activity& act) {
+	static uint32 asScore(Score sc, const Clasp::ConstraintScore& act) {
 		if (sc == score_act)  { return scoreAct(act); }
 		if (sc == score_lbd)  { return scoreLbd(act); }
 		/*  sc == score_both*/{ return scoreBoth(act);}
 	}
-	uint32 glue    : 8; /*!< Don't remove nogoods with lbd <= glue.    */
+	ReduceStrategy() : protect(0), glue(0), fReduce(75), fRestart(0), score(0), algo(0), estimate(0), noGlue(0) {
+		static_assert(sizeof(ReduceStrategy) == sizeof(uint32), "invalid bitset");
+	}
+	uint32 protect : 7; /*!< Protect nogoods whose lbd was reduced and is now <= freeze. */
+	uint32 glue    : 4; /*!< Don't remove nogoods with lbd <= glue.    */
 	uint32 fReduce : 7; /*!< Fraction of nogoods to remove in percent. */
 	uint32 fRestart: 7; /*!< Fraction of nogoods to remove on restart. */
 	uint32 score   : 2; /*!< One of Score.                             */
@@ -258,12 +285,13 @@ struct ReduceStrategy {
 
 //! Aggregates parameters for the nogood deletion heuristic used during search.
 /*!
- * S:delCond {yes,no}
- * no:del {0}[0]
- * no:del | delCond in {no}
- * deletion | delCond in {yes}
- * del-* | delCond in {yes}
- * {delCond=yes, del-grow=no, del-cfl=no}
+ * - S:delCond {yes,no}
+ * - no:del {0}[0]
+ * - no:del | delCond in {no}
+ * - deletion | delCond in {yes}
+ * - del-* | delCond in {yes}
+ * - {delCond=yes, del-grow=no, del-cfl=no}
+ * .
  */
 struct ReduceParams {
 	ReduceParams() : cflSched(ScheduleStrategy::none()), growSched(ScheduleStrategy::def())
@@ -272,7 +300,7 @@ struct ReduceParams {
 		, fGrow(1.1f)
 		, initRange(10, UINT32_MAX)
 		, maxRange(UINT32_MAX)
-	  , memMax(0) {}
+		, memMax(0) {}
 	void    disable();
 	uint32  prepare(bool withLookback);
 	Range32 sizeInit(const SharedContext& ctx) const;
@@ -294,16 +322,17 @@ struct ReduceParams {
 
 //! Parameter-Object for grouping solve-related options.
 /*!
- * \ingroup solver
+ * \ingroup enumerator
  */
 struct SolveParams {
 	//! Creates a default-initialized object.
 	/*!
 	 * The following parameters are used:
-	 * restart      : quadratic: 100*1.5^k / no restarts after first solution
-	 * deletion     : initial size: vars()/3, grow factor: 1.1, max factor: 3.0, do not reduce on restart
-	 * randomization: disabled
-	 * randomProp   : 0.0 (disabled)
+	 * - restart      : quadratic: 100*1.5^k / no restarts after first solution
+	 * - deletion     : initial size: vars()/3, grow factor: 1.1, max factor: 3.0, do not reduce on restart
+	 * - randomization: disabled
+	 * - randomProp   : 0.0 (disabled)
+	 * .
 	 */
 	SolveParams();
 	uint32  prepare(bool withLookback);
@@ -313,11 +342,11 @@ struct SolveParams {
 	uint32        randRuns:16; /*!< Number of initial randomized-runs. */
 	uint32        randConf:16; /*!< Number of conflicts comprising one randomized-run. */
 	float         randProb;    /*!< Use random heuristic with given probability ([0,1]) */
-	struct FwdCheck {          /*!< Options for partial checks in DLP-solving; */
-		uint32 initHigh : 24;    /*!< Init high level to this DL (0 = max level) */
+	struct FwdCheck {          /*!< Options for (partial checks in) DLP-solving; */
+		uint32 highStep : 24;    /*!< Init/inc high level when reached. */
 		uint32 highPct  :  7;    /*!< Check on low + (high - low) * highPct/100  */
-		uint32 incHigh  :  1;    /*!< Inc high level when reached. */
-		FwdCheck() { *reinterpret_cast<uint32*>(this) = 0; }
+		uint32 signDef  :  2;    /*!< Default sign heuristic for atoms in disjunctions. */
+		FwdCheck() { std::memset(this, 0, sizeof(*this)); }
 	}             fwdCheck;
 };
 
@@ -326,24 +355,19 @@ class SatPreprocessor;
 
 //! Parameters for (optional) Sat-preprocessing.
 struct SatPreParams {
-	enum Mode {
-		prepro_preserve_sat    = 0, /**< Allow full preprocessing.                 */
-		prepro_preserve_models = 1, /**< Only allow model-preserving preprocessing.*/
-	};
-	enum Type {
+	enum Algo {
 		sat_pre_no     = 0, /**< Disable sat-preprocessing.                            */
 		sat_pre_ve     = 1, /**< Run variable elimination.                             */
 		sat_pre_ve_bce = 2, /**< Run variable- and limited blocked clause elimination. */
 		sat_pre_full   = 3, /**< Run variable- and full blocked clause elimination.    */
 	};
-	SatPreParams() : type(0u), mode(0u), limIters(0u), limTime(0u), limFrozen(0u), limClause(4000u), limOcc(0u) {}
-	uint32 type     :  2; /**< One of Type. */
-	uint32 mode     :  1; /**< One of Mode. */
-	uint32 limIters : 10; /**< Max. number of iterations.                         (0=no limit)*/
+	SatPreParams() : type(0u), limIters(0u), limTime(0u), limFrozen(0u), limClause(4000u), limOcc(0u) {}
+	uint32 type     :  2; /**< One of algo. */
+	uint32 limIters : 11; /**< Max. number of iterations.                         (0=no limit)*/
 	uint32 limTime  : 12; /**< Max. runtime in sec, checked after each iteration. (0=no limit)*/
 	uint32 limFrozen:  7; /**< Run only if percent of frozen vars < maxFrozen.    (0=no limit)*/
-	uint32 limClause: 16; /**< Run only if #clauses < (limClause*1000)            (0=no limit)*/ 
-	uint32 limOcc   : 16; /**< Skip v, if #occ(v) >= limOcc && #occ(~v) >= limOcc.(0=no limit)*/
+	uint32 limClause: 16; /**< Run only if \#clauses \< (limClause*1000)          (0=no limit)*/ 
+	uint32 limOcc   : 16; /**< Skip v, if \#occ(v) \>= limOcc && \#occ(~v) \>= limOcc.(0=no limit) */
 	bool clauseLimit(uint32 nc)           const { return limClause && nc > (limClause*1000u); }
 	bool occLimit(uint32 pos, uint32 neg) const { return limOcc && pos > (limOcc-1u) && neg > (limOcc-1u); }
 	uint32 bce()                          const { return type != sat_pre_no ? type - 1 : 0; }
@@ -405,6 +429,13 @@ public:
 	virtual DecisionHeuristic* heuristic(uint32 i)  const = 0;
 	//! Adds post propagators to the given solver.
 	virtual bool               addPost(Solver& s)   const = 0;
+	//! Returns the configuration with the given name or 0 if no such config exists.
+	/*!
+	 * The default implementation returns this 
+	 * if n is empty or one of "." or "/". 
+	 * Otherwise, 0 is returned.
+	 */
+	virtual Configuration*     config(const char* n);
 };
 
 //! Base class for user-provided configurations.
@@ -422,8 +453,19 @@ public:
 	virtual SearchOpts&     addSearch(uint32 i) = 0;
 };
 
+//! Simple factory for decision heuristics.
+struct Heuristic_t {
+	enum Type { Default = 0, Berkmin = 1, Vsids = 2, Vmtf = 3, Domain = 4, Unit = 5, None = 6, User = 7  };
+	typedef DecisionHeuristic* (*Creator)(Type t, const HeuParams& p);
+	static inline bool        isLookback(uint32 type) { return type >= (uint32)Berkmin && type < (uint32)Unit; }
+	//! Default callback for creating decision heuristics.
+	static DecisionHeuristic* create(Type t, const HeuParams& p);
+};
+
+//! Basic configuration for one or more SAT solvers.
 class BasicSatConfig : public UserConfiguration, public ContextParams {
 public:
+	typedef Heuristic_t::Creator HeuristicCreator;
 	BasicSatConfig();
 	void               prepare(SharedContext&);
 	const CtxOpts&     context()            const { return *this; }
@@ -437,18 +479,36 @@ public:
 	
 	virtual void       reset();
 	virtual void       resize(uint32 numSolver, uint32 numSearch);
+	//! Sets callback function for creating heuristics.
+	void               setHeuristicCreator(HeuristicCreator hc);
 private:
 	typedef PodVector<SolverOpts>::type SolverVec;
 	typedef PodVector<SearchOpts>::type SearchVec;
 	SolverVec solver_;
 	SearchVec search_;
+	HeuristicCreator heu_;
 };
 
-//! Simple factory for decision heuristics.
-struct Heuristic_t {
-	enum Type { heu_default = 0, heu_berkmin = 1, heu_vsids = 2, heu_vmtf = 3, heu_domain = 4, heu_unit = 5, heu_none = 6  };
-	static inline bool        isLookback(uint32 type) { return type >= (uint32)heu_berkmin && type < (uint32)heu_unit; }
-	static DecisionHeuristic* create(const SolverParams&);
+//! Base class for solving related events.
+template <class T>
+struct SolveEvent : Event_t<T> {
+	SolveEvent(const Solver& s, Event::Verbosity verb) : Event_t<T>(Event::subsystem_solve, verb), solver(&s) {}
+	const Solver* solver;
+};
+struct Model;
+//! Base class for handling results of a solve operation.
+class ModelHandler {
+public:
+	virtual ~ModelHandler();
+	virtual bool onModel(const Solver&, const Model&) = 0;
+	virtual bool onUnsat(const Solver&, const Model&);
+};
+//! Type for storing the lower bound of a minimize statement.
+struct LowerBound {
+	LowerBound() : level(0), bound(0) {}
+	void reset() { level = 0; bound = 0; }
+	uint32 level;
+	wsum_t bound;
 };
 
 }

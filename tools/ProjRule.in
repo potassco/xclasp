@@ -15,8 +15,7 @@ $(LIBS): $(SUBDIRS) ;
 
 # Rule for making subdir targets
 $(SUBDIRS):
-	@$(MAKE) -C $@ $(findstring clean, $(MAKECMDGOALS))
-
+	@$(MAKE) -C $@ $(filter clean test, $(MAKECMDGOALS))
 
 $(FLAGS):
 	$(error No configuration found - please run $(PROJECT_ROOT)/configure first)
@@ -29,6 +28,7 @@ clean: $(SUBDIRS)
 	@$(RM) $(TARGET)
 	@$(RM) $(OBJECTS)
 	@$(RM) $(DEPS)
+	@$(RM) $(TEST_TARGETS)
 else
 install: $(TARGET)
 	 copy $(subst /,\,$(TARGET)) $(INSTALL_DIR)
@@ -37,5 +37,6 @@ clean: $(SUBDIRS)
 	@$(RM) $(subst /,\,$(TARGET))  2>nul
 	@$(RM) $(subst /,\,$(OBJECTS)) 2>nul
 	@$(RM) $(subst /,\,$(DEPS))    2>nul
+	@$(RM) $(subst /,\,$(TEST_TARGETS)) 2>nul
 endif
 

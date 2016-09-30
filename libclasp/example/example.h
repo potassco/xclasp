@@ -20,9 +20,11 @@
 #include <iostream>
 namespace Clasp { 
 	struct Model;
-	class  SymbolTable;
+	class  OutputTable;
+	namespace Asp { class  LogicProgram; }
 }
-void printModel(const Clasp::SymbolTable& sym, const Clasp::Model& model);
+void printModel(const Clasp::OutputTable& out, const Clasp::Model& model);
+void addSimpleProgram(Clasp::Asp::LogicProgram& prg);
 
 void example1();
 void example2();

@@ -2,7 +2,7 @@
 <VisualStudioProject
 	ProjectType="Visual C++"
 	Version="9,00"
-	Name="test"
+	Name="test_clasp"
 	ProjectGUID="{73ACA93A-C49E-4537-BC3A-DCF91E85ED2A}"
 	RootNamespace="test"
 	Keyword="Win32Proj"
@@ -41,8 +41,8 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				Optimization="0"
-				AdditionalIncludeDirectories="..\..\..\..\libclasp"
-				PreprocessorDefinitions="WIN32;_DEBUG;_CONSOLE;WITH_THREADS=1;WITH_TEST_CLI=1"
+				AdditionalIncludeDirectories="..\..\..\..\libclasp;..\..\..\..\liblp"
+				PreprocessorDefinitions="WIN32;_DEBUG;_CONSOLE;WITH_THREADS=1"
 				MinimalRebuild="true"
 				BasicRuntimeChecks="3"
 				RuntimeLibrary="3"
@@ -255,6 +255,10 @@
 			Filter="h;hpp;hxx;hm;inl;inc;xsd"
 			UniqueIdentifier="{93995380-89BD-4b04-88EB-625FBE52EBFB}"
 			>
+			<File
+				RelativePath="..\..\..\..\libclasp\tests\lpcompare.h"
+				>
+			</File>
 			<File
 				RelativePath="..\..\..\..\libclasp\tests\test.h"
 				>

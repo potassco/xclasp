@@ -1,5 +1,5 @@
 // 
-// Copyright (c) 2006-2012, Benjamin Kaufmann
+// Copyright (c) 2006-2016, Benjamin Kaufmann
 // 
 // This file is part of Clasp. See http://www.cs.uni-potsdam.de/clasp/ 
 // 
@@ -21,36 +21,18 @@
 #define CLASP_SOLVER_H_INCLUDED
 #ifdef _MSC_VER
 #pragma once
-#pragma warning (disable : 4996) // 'std::copy': Function call with parameters that may be unsafe
 #endif
 
 #include <clasp/solver_types.h>
 #include <clasp/solver_strategies.h>
 #include <clasp/shared_context.h>
 
-namespace Clasp { 
-
-//! Parameter-Object for managing search limits.
-struct SearchLimits {
-	explicit SearchLimits(uint64 conf = UINT64_MAX) 
-		: conflicts(conf)
-		, local(UINT64_MAX)
-		, memLimit(UINT64_MAX)
-		, dynamic(0)
-		, learnts(UINT32_MAX) {
-	}
-	bool reached()           const { return conflicts == 0 || local == 0 || hasDynamicRestart(); }
-	bool hasDynamicRestart() const { return dynamic && dynamic->isRestart(); } 
-	void setMemLimit(uint32 limitInMB) { memLimit = limitInMB ? static_cast<uint64>(limitInMB)<<20 : UINT64_MAX; }
-	uint64    conflicts; /*!< Search for at least number of conflicts.             */
-	uint64    local;     /*!< Search for at least number of conflicts in branch.   */
-	uint64    memLimit;  /*!< (Soft) memory limit for learnt lemmas (in bytes).    */
-	SumQueue* dynamic;   /*!< Use dynamic restarts based on lbd or conflict level. */
-	uint32    learnts;   /*!< Limit on number of learnt lemmas.                    */
-};
+namespace Clasp {
 
 /**
- * \defgroup solver Solver and related classes.
+ * \file
+ * \defgroup solver Solver
+ * \brief %Solver and related classes.
  */
 //@{
 
@@ -71,12 +53,12 @@ struct SearchLimits {
  * Once search terminates assumptions can be undone by calling clearAssumptions
  * and a new a search can be started using different assumptions.
  *
- * For model enumeration the solver maintains a backtrack-level which restricts
+ * For model enumeration the solver maintains a backtrack-level that restricts
  * backjumping in order to prevent repeating already enumerated solutions.
  * The solver will never backjump above that level and conflicts on the backtrack-level 
  * are resolved by backtracking, i.e. flipping the corresponding decision literal.
  *
- * \see "Conflict-Driven Answer Set Enumeration" for a detailed description of this approach. 
+ * \see "Conflict-Driven Answer Set Enumeration" for a detailed description of this approach.
  *
  */
 class Solver {
@@ -85,25 +67,19 @@ public:
 	typedef const ConstraintDB&               DBRef;
 	typedef SingleOwnerPtr<DecisionHeuristic> HeuristicPtr;
 private:
-	/*!
-	 * \name Construction/Destruction/Setup
-	 */
-	//@{
 	friend class SharedContext;
-	//! Creates an empty solver object with all strategies set to their default value.
+	// Creates an empty solver object with all strategies set to their default value.
 	Solver(SharedContext* ctx, uint32 id);
-	//! Destroys the solver object and all contained constraints.
 	~Solver();
-	//! Resets a solver object to the state it had after construction.
+	// Resets a solver object to the state it had after construction.
 	void reset();
 	void resetConfig();
-	void resetId(uint32 id) { strategy_.id = id; }
 	void startInit(uint32 constraintGuess, const SolverParams& params);
+	void updateVars();
 	bool cloneDB(const ConstraintDB& db);
 	bool preparePost();
 	bool endInit();
-	bool endStep(uint32 top);
-	//@}
+	bool endStep(uint32 top, const SolverParams& params);
 public:
 	typedef SolverStrategies::SearchStrategy SearchMode;
 	typedef SolverStrategies::UpdateMode     UpdateMode;
@@ -112,7 +88,7 @@ public:
 	const SharedContext*    sharedContext() const { return shared_; }
 	//! Returns a pointer to the sat-preprocessor used by this solver.
 	SatPreprocessor*        satPrepro()     const;
-	//! Returns the solve parameters for this object.
+	//! Returns the solver's solve parameters.
 	const SolveParams&      searchConfig()  const;
 	SearchMode              searchMode()    const { return static_cast<SearchMode>(strategy_.search); }
 	UpdateMode              updateMode()    const { return static_cast<UpdateMode>(strategy_.upMode); }
@@ -122,8 +98,13 @@ public:
 	DecisionHeuristic*      heuristic()     const { return heuristic_.get();}
 	uint32                  id()            const { return strategy_.id; }
 	VarInfo                 varInfo(Var v)  const { return shared_->validVar(v) ? shared_->varInfo(v) : VarInfo(); }
-	const SymbolTable&      symbolTable()   const { return shared_->symbolTable(); }
+	const OutputTable&      outputTable()   const { return shared_->output; }
 	Literal                 tagLiteral()    const { return tag_; }
+	bool                    isMaster()      const { return this == sharedContext()->master(); }
+	/*!
+	 * \name Setup functions
+	 * Functions in this group are typically used before a search is started.
+	 * @{ */
 	//! Adds the problem constraint c to the solver.
 	/*!
 	 * Problem constraints shall only be added to the master solver of 
@@ -153,20 +134,39 @@ public:
 	 * \note Post propagators are stored and called in priority order.
 	 * \see PostPropagator::priority()
 	 */
-	bool                    addPost(PostPropagator* p) { return addPost(p, initPost_ != 0); }
+	bool                    addPost(PostPropagator* p);
 	//! Removes p from the solver's list of post propagators.
 	/*!
 	 * \note The function shall not be called during propagation of any other post propagator.
 	 */
-	void                    removePost(PostPropagator* p){ post_.remove(p); }
+	void                    removePost(PostPropagator* p);
+	
+	//! Adds path to the current root-path and adjusts the root-level accordingly.
+	bool pushRoot(const LitVec& path);
+	bool pushRoot(Literal p);
+	void setEnumerationConstraint(Constraint* c);
+	//! Requests a special aux variable for tagging conditional knowledge.
 	/*!
-	 * \name CDNL-functions.
+	 * Once a tag variable t is set, learnt clauses containing ~t are
+	 * tagged as "conditional". Conditional clauses are removed once t becomes
+	 * unassigned or Solver::removeConditional() is called. Furthermore, calling
+	 * Solver::strengthenConditional() removes ~t from conditional clauses and
+	 * transforms them to unconditional knowledge.
+	 *
+	 * \note Typically, the tag variable is a root assumption and hence true during
+	 *       the whole search.
 	 */
-	//@{
+	Var  pushTagVar(bool pushToRoot);
+	//@}
+
+	/*!
+	 * \name CDNL functions
+	 * Top level functions that are important to the CDNL algorithm.
+	 * @{ */
+
 	//! Searches for a model as long as the given limit is not reached.
 	/*!
-	 * The search function implements the CDNL-algorithm.
-	 * It searches for a model as long as none of the limits given by limit
+	 * The function searches for a model as long as none of the limits given by limit
 	 * is reached. The limits are updated during search.
 	 *
 	 * \param limit Imposed limit on conflicts and number of learnt constraints.
@@ -180,19 +180,7 @@ public:
 	 * \note search treats the root level as top-level, i.e. it will never backtrack below that level.
 	 */
 	ValueRep search(SearchLimits& limit, double randf = 0.0);
-	ValueRep search(uint64 maxC, uint32 maxL, bool local = false, double rp  = 0.0) {
-		SearchLimits limit;
-		if (!local) { limit.conflicts = maxC; }
-		else        { limit.conflicts = UINT64_MAX; limit.local = maxC; }
-		limit.learnts = maxL;
-		return search(limit, rp);
-	}
-
-	//! Adds path to the current root-path and adjusts the root-level accordingly.
-	bool pushRoot(const LitVec& path);
-	bool pushRoot(Literal p);
-	
-	void setEnumerationConstraint(Constraint* c);
+	ValueRep search(uint64 maxC, uint32 maxL, bool local = false, double rp  = 0.0);
 
 	//! Moves the root-level i levels down (i.e. away from the top-level).
 	/*!
@@ -201,8 +189,8 @@ public:
 	 * above the root-level. 
 	 */
 	void pushRootLevel(uint32 i = 1) { 
-		levels_.root      = std::min(decisionLevel(), levels_.root+i);
-		levels_.backtrack = std::max(levels_.backtrack, levels_.root);
+		levels_.root = std::min(decisionLevel(), levels_.root+i);
+		levels_.flip = std::max(levels_.flip, levels_.root);
 	}
 	
 	//! Moves the root-level i levels up (i.e. towards the top-level).
@@ -211,7 +199,7 @@ public:
 	 * resets the current backtrack-level, and re-assigns any implied literals.
 	 * \param      i      Number of root decisions to pop.
 	 * \param[out] popped Optional storage for popped root decisions.
-	 * \param      filter Whether or not aux variables should be added to popped.
+	 * \param      aux    Whether or not aux variables should be added to popped.
 	 * \post decisionLevel() == rootLevel()
 	 * \note The function first calls clearStopConflict() to remove any stop conflicts.
 	 * \note The function *does not* propagate any asserted literals. It is
@@ -233,12 +221,12 @@ public:
 	 */
 	bool clearAssumptions();
 
-	//! Adds the learnt constraint c to the solver.
-	void addLearnt(LearntConstraint* c, uint32 size, ConstraintType type) {
+	//! Adds c as a learnt constraint to the solver.
+	void addLearnt(Constraint* c, uint32 size, ConstraintType type) {
 		learnts_.push_back(c);
 		stats.addLearnt(size, type); 
 	}
-	void addLearnt(LearntConstraint* c, uint32 size) { addLearnt(c, size, c->type()); }
+	void addLearnt(Constraint* c, uint32 size) { addLearnt(c, size, c->type()); }
 	//! Tries to receive at most maxOut clauses.
 	/*!
 	 * The function queries the distributor object for new clauses to be delivered to
@@ -253,7 +241,6 @@ public:
 	 * If so and a distributor was set, it distributes the clause and returns a handle to the
 	 * now shared literals of the clause. Otherwise, it returns 0.
 	 *
-	 * \param owner The solver that created the clause.
 	 * \param lits  The literals of the clause.
 	 * \param size  The number of literals in the clause.
 	 * \param extra Additional information about the clause.
@@ -262,22 +249,32 @@ public:
 	 *   responsibility to release the returned handle (i.e. by calling release()).
 	 * \note If the clause contains aux vars, it is not distributed.
 	 */
-	SharedLiterals* distribute(const Literal* lits, uint32 size, const ClauseInfo& extra);
+	SharedLiterals* distribute(const Literal* lits, uint32 size, const ConstraintInfo& extra);
 	
 
 	//! Returns to the maximum of rootLevel() and backtrackLevel() and increases the number of restarts.
 	void restart() {
 		undoUntil(0);
 		++stats.restarts;
-		ccInfo_.setActivity(ccInfo_.activity() + 1);
+		ccInfo_.score().bumpActivity();
 	}
-
+	enum UndoMode { undo_default = 0u, undo_pop_bt_level = 1u, undo_pop_proj_level = 2u, undo_save_phases = 4u };
 	//! Sets the backtracking level to dl.
-	void setBacktrackLevel(uint32 dl) {
-		levels_.backtrack = std::max(std::min(dl, decisionLevel()), rootLevel());
+	/*!
+	 * Depending on mode, the backtracking level either applies
+	 * to normal or projective solution enumeration.
+	 * \see "Solution Enumeration for Projected Boolean Search Problems".
+	 */
+	void setBacktrackLevel(uint32 dl, UndoMode mode = undo_pop_bt_level) {
+		if (uint32(mode) >= levels_.mode) {
+			levels_.flip = std::max(std::min(dl, decisionLevel()), rootLevel());
+			levels_.mode = std::max(uint32(mode & 3u), uint32(undo_pop_bt_level));
+		}
 	}
 	//! Returns the current backtracking level.
-	uint32 backtrackLevel() const { return levels_.backtrack; }
+	uint32 backtrackLevel() const { return levels_.flip; }
+	//! Returns the backjump level during an undo operation.
+	uint32 jumpLevel()      const { return decisionLevel() - levels_.jump; }
 
 	//! Returns whether the solver can split-off work.
 	bool splittable() const;
@@ -295,7 +292,7 @@ public:
 	 *   - any literals that are implied on a level <= rootLevel() because of newly learnt
 	 *     information. This particularly includes literals that were flipped during model enumeration.
 	 * 
-	 * \param[out] gp where to store the guiding path
+	 * \param[out] out Where to store the guiding path.
 	 */
 	void copyGuidingPath(LitVec& out);
 
@@ -309,18 +306,7 @@ public:
 	//! Shuffle constraints upon next simplification.
 	void shuffleOnNextSimplify(){ shufSimp_ = 1; }
 
-	//! Requests a special aux variable for tagging conditional knowledge.
-	/*!
-	 * Once a tag variable t is set, learnt clauses containing ~t are
-	 * tagged as "conditional". Conditional clauses are removed once t becomes
-	 * unassigned or Solver::removeConditional() is called. Furthermore, calling 
-	 * Solver::strengthenConditional() removes ~t from conditional clauses and
-	 * transforms them to unconditional knowledge.
-	 *
-	 * \note Typically, the tag variable is a root assumption and hence true during 
-	 *       the whole search.
-	 */
-	Var  pushTagVar(bool pushToRoot);
+
 	//! Removes all conditional knowledge, i.e. all previously tagged learnt clauses.
 	/*!
 	 * \see Solver::pushTagVar()
@@ -361,7 +347,6 @@ public:
 	}
 	/*!
 	 * \overload bool Solver::force(const Literal&, const Antecedent&)
-	 * \pre data == UINT32_MAX || requestData(p.var()) was called during setup
 	 */
 	bool force(const Literal& p, const Antecedent& a, uint32 data) {
 		return data != UINT32_MAX 
@@ -378,24 +363,10 @@ public:
 	 *   p on backtracking.
 	 */
 	bool force(Literal p, uint32 dl, const Antecedent& r, uint32 d = UINT32_MAX) {
-		// Correct level?
-		if (dl == decisionLevel()) { return force(p, r, d); } 
-		// Already implied?
-		if (isTrue(p)) {
-			if (level(p.var()) <= dl) { return true; }
-			if (ImpliedLiteral* x = impliedLits_.find(p)) {
-				return x->level <= dl || (*x = ImpliedLiteral(p, dl, r, d), setReason(p, r, d));
-			}
-		}
-		// Can we return to correct level?
-		if (undoUntil(dl) == dl) { return force(p, r, d); }
-		// Logically the implication is on level dl.
-		// Store enough information so that p can be re-assigned once we backtrack.
-		impliedLits_.add(decisionLevel(), ImpliedLiteral(p, dl, r, d));
-		return (isTrue(p) && setReason(p, r, d)) || force(p, r, d);
+		return dl == decisionLevel() ? force(p, r, d) : force(ImpliedLiteral(p, dl, r, d));
 	}
 	//! Assigns p as a fact at decision level 0.
-	bool force(Literal p) { return force(p, 0, Antecedent(posLit(0))); }
+	bool force(Literal p) { return force(p, 0, Antecedent(lit_true())); }
 
 	//! Assumes the literal p if possible.
 	/*!
@@ -449,7 +420,7 @@ public:
 	 * \pre  p is a post propagator of this solver, i.e. was previously added via addPost().
 	 * \pre  Post propagators are active, i.e. the solver is fully initialized.
 	 */
-	bool propagateUntil(PostPropagator* p) { assert((!p || post_.active()) && "OP not allowed during init!"); return unitPropagate() && (p == post_.active() || post_.propagate(*this, p)); }
+	bool propagateUntil(PostPropagator* p);
 
 	//! Executes a one-step lookahead on p.
 	/*!
@@ -508,7 +479,7 @@ public:
 	 */
 	bool resolveConflict();
 
-	//! Backtracks the last decision and sets the backtrack-level to the resulting decision level.
+	//! Backtracks the last decision and updates the backtrack-level if necessary.
 	/*!
 	 * \return
 	 *  - true if backtracking was possible
@@ -516,15 +487,13 @@ public:
 	 */
 	bool backtrack();
 
-	enum UndoMode { undo_default = 0u, undo_pop_bt_level = 1u, undo_save_phases = 2u };
 	//! Undoes all assignments up to (but not including) decision level dl.
 	/*!
-	 * \pre dl > 0 (assignments made on decision level 0 cannot be undone)
-	 * \post decisionLevel == max(min(decisionLevel(), dl), max(rootLevel(), backtrackLevel()))
-	 * \return The decision level after backtracking.
-	 * \note
-	 *   If undoMode contains undo_pop_bt_level, the function first tries to set the backtrack-level 
-	 *   to min(backtrackLevel(), dl) if possible.
+	 * \post decision level == max(min(decisionLevel(), dl), max(rootLevel(), backtrackLevel()))
+	 * \return The decision level after undoing assignments.
+	 * \note 
+	 *   undoUntil() stops at the current backtrack level unless undoMode includes the mode
+	 *   that was used when setting the backtrack level.
 	 * \note
 	 *   If undoMode contains undo_save_phases, the functions saves the values of variables that are undone.
 	 *   Otherwise, phases are only saved if indicated by the active strategy.
@@ -532,6 +501,8 @@ public:
 	uint32 undoUntil(uint32 dl, uint32 undoMode);
 	//! Behaves like undoUntil(dl, undo_default).
 	uint32 undoUntil(uint32 dl) { return undoUntilImpl(dl, false); }
+	//! Returns whether undoUntil(decisionLevel()-1) is valid and would remove decisionLevel().
+	bool   isUndoLevel() const;
 	
 	//! Adds a new auxiliary variable to this solver.
 	/*!
@@ -540,17 +511,16 @@ public:
 	 * after problem setup is completed.
 	 */
 	Var  pushAuxVar();
-	//! Pops the num most recently added auxiliary variables from this solver.
-	void popAuxVar(uint32 num = UINT32_MAX);
+	//! Pops the num most recently added auxiliary variables and destroys all constraints in auxCons.
+	void popAuxVar(uint32 num = UINT32_MAX, ConstraintDB* auxCons = 0);
 	//@}  
 	
 	/*!
-	 * \name state inspection
+	 * \name State inspection
 	 * Functions for inspecting the state of the solver & search.
 	 * \note validVar(v) is a precondition for all functions that take a variable as 
 	 * parameter.
-	 */
-	//@{
+	 * @{ */
 	//! Returns the number of problem variables.
 	uint32   numProblemVars()       const { return shared_->numVars(); }
 	//! Returns the number of active solver-local aux variables.
@@ -612,7 +582,7 @@ public:
 	Literal  decision(uint32 dl)    const { assert(validLevel(dl)); return assign_.trail[ levels_[dl-1].trailPos ]; }
 	//! Returns true, if the current assignment is conflicting.
 	bool     hasConflict()          const { return !conflict_.empty(); }
-	bool     hasStopConflict()      const { return hasConflict() && conflict_[0] == negLit(0); }
+	bool     hasStopConflict()      const { return hasConflict() && conflict_[0] == lit_false(); }
 	//! Returns the number of (unprocessed) literals in the propagation queue.
 	uint32   queueSize()            const { return (uint32) assign_.qSize(); }
 	//! Number of problem constraints in this solver.
@@ -646,22 +616,22 @@ public:
 	/*!
 	 * \pre idx < numLearntConstraints()
 	 */
-	LearntConstraint& getLearnt(uint32 idx)          const {
+	Constraint& getLearnt(uint32 idx) const {
 		assert(idx < numLearntConstraints());
-		return *static_cast<LearntConstraint*>(learnts_[ idx ]);
+		return *learnts_[ idx ];
 	}
 
-	mutable RNG rng;   /**< Random number generator for this object.     */
-	ValueVec    model; /**< Stores the last model (if any).              */
-	SolverStats stats; /**< Stores statistics about the solving process. */
+	mutable RNG rng;   //!< Random number generator for this object.
+	ValueVec    model; //!< Stores the last model (if any).
+	LowerBound  lower; //!< Stores the last lower bound found (if any).
+	SolverStats stats; //!< Stores statistics about the solving process.
 	//@}
 
 	/*!
 	 * \name Watch management
 	 * Functions for setting/removing watches.
 	 * \pre validVar(v)
-	 */
-	//@{
+	 * @{ */
 	//! Returns the number of constraints watching the literal p.
 	uint32        numWatches(Literal p)              const;
 	//! Returns true if the constraint c watches the literal p.
@@ -679,12 +649,12 @@ public:
 	 */
 	void addWatch(Literal p, Constraint* c, uint32 data = 0) {
 		assert(validWatch(p));
-		watches_[p.index()].push_right(GenericWatch(c, data));
+		watches_[p.id()].push_right(GenericWatch(c, data));
 	}
 	//! Adds w to the clause watch-list of p.
 	void addWatch(Literal p, const ClauseWatch& w) {
 		assert(validWatch(p));
-		watches_[p.index()].push_left(w);
+		watches_[p.id()].push_left(w);
 	}
 	//! Removes c from p's watch-list.
 	/*!
@@ -715,10 +685,9 @@ public:
 	 * \name Misc functions
 	 * Low-level implementation functions. Use with care and only if you
 	 * know what you are doing!
-	 */
-	//@{
-	bool addPost(PostPropagator* p, bool init) { post_.add(p, p->priority()); return !init || p->init(*this); }
-	//! Updates the reason for p being tue.
+	 * @{ */
+	bool addPost(PostPropagator* p, bool init);
+	//! Updates the reason for p being true.
 	/*!
 	 * \pre p is true and x is a valid reason for p
 	 */
@@ -728,8 +697,6 @@ public:
 		if (data != UINT32_MAX) { assign_.setData(p.var(), data); }
 		return true;
 	}
-	//! Request additional reason data slot for variable v.
-	void requestData(Var v) { assign_.requestData(v + 1); }
 	void setPref(Var v, ValueSet::Value which, ValueRep to) {
 		assert(validVar(v) && to <= value_false);
 		assign_.requestPrefs();
@@ -739,51 +706,66 @@ public:
 	void resetLearntActivities();
 	//! Returns the reason for p being true as a set of literals.
 	void reason(Literal p, LitVec& out) { assert(isTrue(p)); out.clear(); return assign_.reason(p.var()).reason(*this, p, out); }
-	//! Computes a new lbd for the antecedent of p given as the range [first, last).
+	
+	//! Helper function for updating antecedent scores during conflict resolution.
 	/*!
-	 * \param p A literal implied by [first, last)
-	 * \param [first, last) The literals of a learnt nogood implying p.
-	 * \param cLbd The current lbd of the learnt nogood.
-	 * \return The new lbd of the learnt nogood.
+	 * \param sc   The current score of the active antecedent.
+	 * \param p    The literal implied by the active antecedent.
+	 * \param lits The literals of the active antecedent.
+	 * \return true if a score was updated.
+	 *
+	 * \note Depending on the active solver strategies, the function
+	 *       increases the activity and/or updates the lbd of the given antecedent.
 	 *
 	 * \note If SolverStrategies::bumpVarAct is active, p's activity
 	 *       is increased if the new lbd is smaller than the lbd of the
 	 *       conflict clause that is currently being derived.
 	 */
-	uint32 updateLearnt(Literal p, const Literal* first, const Literal* last, uint32 cLbd, bool forceUp = false) {
+	bool updateOnReason(ConstraintScore& sc, Literal p, const LitVec& lits) {
+		// update only during conflict resolution
+		if (&lits != &conflict_) { return false; }
+		sc.bumpActivity();
 		uint32 up = strategy_.updateLbd;
-		if ((up || forceUp) && cLbd > 1) {
-			uint32 strict = (up == 2u);
-			uint32 p1     = (up == 3u);
-			uint32 nLbd   = (strict|p1) + countLevels(first, last, cLbd - strict);
-			if (nLbd < cLbd) { cLbd = nLbd - p1; }
+		if ((up || !sc.hasLbd()) && !lits.empty()) {
+			uint32 lbd  = sc.lbd();
+			uint32 inc  = uint32(up != 1u);
+			uint32 nLbd = countLevels(&lits[0], &lits[0] + lits.size(), lbd - inc);
+			if ((nLbd + inc) < lbd) {
+				sc.bumpLbd(nLbd + uint32(up == 2u));
+			}
 		}
-		if (strategy_.bumpVarAct && isTrue(p)) { bumpAct_.push_back(WeightLiteral(p, cLbd)); }
-		return cLbd;
+		if (strategy_.bumpVarAct && isTrue(p)) { bumpAct_.push_back(WeightLiteral(p, sc.lbd())); }
+		return true;
 	}
-	//! Visitor function for antecedents used during conflict clause minimization.
-	bool ccMinimize(Literal p, CCMinRecursive* rec) const {
-		return seen(p.var()) || 
-			(rec && hasLevel(level(p.var())) && rec->checkRecursive(p));
+	
+	//! Helper function for increasing antecedent activities during conflict clause minimization.
+	bool updateOnMinimize(ConstraintScore& sc) {
+		return !strategy_.ccMinKeepAct && (sc.bumpActivity(), true);
 	}
 
-	//! Returns true if number of learnts exceeds x.learnts or the soft memory limit is exceeded.
-	bool  learntLimit(const SearchLimits& x) const { return numLearntConstraints() > x.learnts || memUse_ > x.memLimit; }
-	
+	//! Helper function for antecedents to be called during conflict clause minimization.
+	bool ccMinimize(Literal p, CCMinRecursive* rec) const {
+		return seen(p.var()) || (rec && hasLevel(level(p.var())) && ccMinRecurse(*rec, p));
+	}
+
 	//! Allocates a small block (32-bytes) from the solver's small block pool.
-	void* allocSmall()       { return smallAlloc_->allocate(); }
+	void* allocSmall()       { return smallAlloc_.allocate(); }
 	//! Frees a small block previously allocated from the solver's small block pool.
-	void  freeSmall(void* m) { smallAlloc_->free(m);    }
+	void  freeSmall(void* m) { smallAlloc_.free(m);    }
 	
 	void  addLearntBytes(uint32 bytes)  { memUse_ += bytes; }
 	void  freeLearntBytes(uint64 bytes) { memUse_ -= (bytes < memUse_) ? bytes : memUse_; }
+
+	bool  restartReached(const SearchLimits& limit) const;
+	bool  reduceReached(const SearchLimits& limit)  const;
 	
 	//! simplifies cc and returns finalizeConflictClause(cc, info);
-	uint32 simplifyConflictClause(LitVec& cc, ClauseInfo& info, ClauseHead* rhs);
-	uint32 finalizeConflictClause(LitVec& cc, ClauseInfo& info, uint32 ccRepMode = 0);
-	uint32 countLevels(const Literal* first, const Literal* last, uint32 maxLevels);
+	uint32 simplifyConflictClause(LitVec& cc, ConstraintInfo& info, ClauseHead* rhs);
+	uint32 finalizeConflictClause(LitVec& cc, ConstraintInfo& info, uint32 ccRepMode = 0);
+	uint32 countLevels(const Literal* first, const Literal* last, uint32 maxLevels = Clasp::LBD_MAX);
 	bool hasLevel(uint32 dl)    const { assert(validLevel(dl)); return levels_[dl-1].marked != 0; }
 	bool frozenLevel(uint32 dl) const { assert(validLevel(dl)); return levels_[dl-1].freeze != 0; }
+	bool inputVar(Literal p)    const { return varInfo(p.var()).input(); }
 	void markLevel(uint32 dl)    { assert(validLevel(dl)); levels_[dl-1].marked = 1; }
 	void freezeLevel(uint32 dl)  { assert(validLevel(dl)); levels_[dl-1].freeze = 1; }
 	void unmarkLevel(uint32 dl)  { assert(validLevel(dl)); levels_[dl-1].marked = 0; }
@@ -791,10 +773,11 @@ public:
 	void markSeen(Var v)         { assert(validVar(v)); assign_.setSeen(v, 3u); }
 	void markSeen(Literal p)     { assert(validVar(p.var())); assign_.setSeen(p.var(), uint8(1+p.sign())); }
 	void clearSeen(Var v)        { assert(validVar(v)); assign_.clearSeen(v);  }
+	void setHeuristic(DecisionHeuristic* h, Ownership_t::Type own);
 	void destroyDB(ConstraintDB& db);
-	void setHeuristic(DecisionHeuristic* h);
-	DecisionHeuristic* releaseHeuristic(bool detach);
 	SolverStrategies&  strategies() { return strategy_; }
+	bool resolveToFlagged(const LitVec& conflictClause, uint8 vflag, LitVec& out, uint32& lbd) const;
+	void resolveToCore(LitVec& out);
 	//@}
 private:
 	struct DLevel {
@@ -809,100 +792,95 @@ private:
 		ConstraintDB* undo;
 	};
 	struct DecisionLevels : public PodVector<DLevel>::type {
-		DecisionLevels() : root(0), backtrack(0) {}
+		DecisionLevels() : root(0), flip(0), mode(0), jump(0) {}
 		uint32 root;      // root level
-		uint32 backtrack; // backtrack level
+		uint32 flip : 30; // backtrack level
+		uint32 mode :  2; // type of backtrack level
+		uint32 jump;      // length of active undo
 	};
 	typedef PodVector<Antecedent>::type ReasonVec;
 	typedef PodVector<WatchList>::type  Watches;
-	struct PPList {
-		PPList();
-		~PPList();
-		void add(PostPropagator* p, uint32 prio);
-		void remove(PostPropagator* p);
-		bool propagate(Solver& s, PostPropagator* p) const;
-		void simplify(Solver& s, bool shuf);
-		void cancel()           const;
-		bool isModel(Solver& s) const;
-		void disable();
-		void enable();
-		PostPropagator* head()  const { return list; }
-		PostPropagator* active()const { return *act; }
-		PostPropagator* list;// head of pp-list
-		PostPropagator**act; // head of active and initialized pps
-	};
+	struct  Dirty;
 	struct CmpScore {
-		typedef std::pair<uint32, Activity> ViewPair;
-		CmpScore(const ConstraintDB& learnts, ReduceStrategy::Score sc, uint32 g) : db(learnts), rs(sc), glue(g) {}
-		uint32 score(const Activity& act)                             const { return ReduceStrategy::asScore(rs, act); }
+		typedef std::pair<uint32, ConstraintScore> ViewPair;
+		CmpScore(const ConstraintDB& learnts, ReduceStrategy::Score sc, uint32 g, uint32 f = 0) : db(learnts), rs(sc), glue(g), freeze(f) {}
+		uint32 score(const ConstraintScore& act)                      const { return ReduceStrategy::asScore(rs, act); }
 		bool operator()(uint32 lhsId, uint32 rhsId)                   const { return (*this)(db[lhsId], db[rhsId]); }
 		bool operator()(const ViewPair& lhs, const ViewPair& rhs)     const { return this->operator()(lhs.second, rhs.second); }
-		bool operator()(Activity lhs, Activity rhs)                   const { return ReduceStrategy::compare(rs, lhs, rhs) < 0;}
-		bool operator()(const Constraint* lhs, const Constraint* rhs) const {
-			return this->operator()(
-				static_cast<const LearntConstraint*>(lhs)->activity(), 
-				static_cast<const LearntConstraint*>(rhs)->activity());
-		}
+		bool operator()(ConstraintScore lhs, ConstraintScore rhs)     const { return ReduceStrategy::compare(rs, lhs, rhs) < 0;}
+		bool operator()(const Constraint* lhs, const Constraint* rhs) const { return this->operator()(lhs->activity(), rhs->activity()); }
+		bool isFrozen(const ConstraintScore& a) const { return a.bumped() && a.lbd() <= freeze; }
+		bool isGlue(const ConstraintScore& a)   const { return a.lbd() <= glue; }
 		const ConstraintDB&   db;
 		ReduceStrategy::Score rs;
 		uint32                glue;
+		uint32                freeze;
 	private: CmpScore& operator=(const CmpScore&);
 	};
-	bool    validWatch(Literal p) const { return p.index() < (uint32)watches_.size(); }
+	bool    validWatch(Literal p) const { return p.id() < (uint32)watches_.size(); }
 	void    freeMem();
+	void    resetHeuristic();
 	bool    simplifySAT();
 	bool    unitPropagate();
-	void    cancelPropagation() { assign_.qReset(); post_.cancel(); }
+	bool    postPropagate(PostPropagator* stop);
+	void    cancelPropagation();
 	uint32  undoUntilImpl(uint32 dl, bool sp);
 	void    undoLevel(bool sp);
 	uint32  analyzeConflict();
+	bool    isModel();
+	bool    resolveToFlagged(const LitVec& conflictClause, uint8 vf, LitVec& out, uint32& lbd);
 	void    otfs(Antecedent& lhs, const Antecedent& rhs, Literal p, bool final);
 	ClauseHead* otfsRemove(ClauseHead* c, const LitVec* newC);
 	uint32  ccMinimize(LitVec& cc, LitVec& removed, uint32 antes, CCMinRecursive* ccMin);
+	void    ccMinRecurseInit(CCMinRecursive& ccMin);
+	bool    ccMinRecurse(CCMinRecursive& ccMin, Literal p) const;
 	bool    ccRemovable(Literal p, uint32 antes, CCMinRecursive* ccMin);
 	Antecedent ccHasReverseArc(Literal p, uint32 maxLevel, uint32 maxNew);
 	void    ccResolve(LitVec& cc, uint32 pos, const LitVec& reason);
 	void    undoFree(ConstraintDB* x);
 	void    setConflict(Literal p, const Antecedent& a, uint32 data);
-	uint64  updateBranch(uint32 cfl);
+	bool    force(const ImpliedLiteral& p);
+	void    updateBranch(uint32 n);
+	uint32  incEpoch(uint32 size, uint32 inc = 1);
 	DBInfo  reduceLinear(uint32 maxR, const CmpScore& cmp);
 	DBInfo  reduceSort(uint32 maxR, const CmpScore& cmp);
 	DBInfo  reduceSortInPlace(uint32 maxR, const CmpScore& cmp, bool onlyPartialSort);
+	Literal popVars(uint32 num, bool popLearnt, ConstraintDB* popAux);
 	ConstraintDB* allocUndo(Constraint* c);
 	SharedContext*    shared_;      // initialized by master thread - otherwise read-only!
 	SolverStrategies  strategy_;    // strategies used by this object
 	HeuristicPtr      heuristic_;   // active decision heuristic
 	CCMinRecursive*   ccMin_;       // additional data for supporting recursive strengthen
-	SmallClauseAlloc* smallAlloc_;  // allocator object for small clauses
+	PostPropagator**  postHead_;    // head of post propagator list to propagate
 	ConstraintDB*     undoHead_;    // free list of undo DBs
 	Constraint*       enum_;        // enumeration constraint - set by enumerator
 	uint64            memUse_;      // memory used by learnt constraints (estimate)
+	Dirty*            lazyRem_;     // set of watch lists that contain invalid constraints
+	SmallClauseAlloc  smallAlloc_;  // allocator object for small clauses
 	Assignment        assign_;      // three-valued assignment.
 	DecisionLevels    levels_;      // information (e.g. position in trail) on each decision level
 	ConstraintDB      constraints_; // problem constraints
 	ConstraintDB      learnts_;     // learnt constraints
-	PPList            post_;        // (possibly empty) list of post propagators
+	PropagatorList    post_;        // (possibly empty) list of post propagators
 	Watches           watches_;     // for each literal p: list of constraints watching p
 	LitVec            conflict_;    // conflict-literals for later analysis
 	LitVec            cc_;          // temporary: conflict clause within analyzeConflict
 	LitVec            temp_;        // temporary: redundant literals in simplifyConflictClause
 	WeightLitVec      bumpAct_;     // temporary: lits from current dl whose activity might get an extra bump
-	VarVec            lbdStamp_;    // temporary vector for computing LBD
+	VarVec            epoch_;       // temporary vector for computing LBD
 	VarVec            cflStamp_;    // temporary vector for computing number of conflicts in branch
 	ImpliedList       impliedLits_; // lits that were asserted on current dl but are logically implied earlier
-	ClauseInfo        ccInfo_;      // temporary: information about conflict clause cc_
+	ConstraintInfo    ccInfo_;      // temporary: information about conflict clause cc_
 	Literal           tag_;         // aux literal for tagging learnt constraints
-	uint32            lbdTime_;     // temporary counter for computing lbd
 	uint32            dbIdx_;       // position of first new problem constraint in master db 
 	uint32            lastSimp_ :30;// number of top-level assignments on last call to simplify
 	uint32            shufSimp_ : 1;// shuffle db on next simplify?
 	uint32            initPost_ : 1;// initialize new post propagators?
 };
-
 inline bool isRevLit(const Solver& s, Literal p, uint32 maxL) {
 	return s.isFalse(p) && (s.seen(p) || s.level(p.var()) < maxL);
 }
-
+//! Simplifies the constraints in db and removes those that are satisfied.
 template <class C>
 void simplifyDB(Solver& s, C& db, bool shuffle) {
 	typename C::size_type j = 0;
@@ -913,25 +891,32 @@ void simplifyDB(Solver& s, C& db, bool shuffle) {
 	}
 	shrinkVecTo(db, j);
 }
+//! Destroys (and optionally detaches) all constraints in db.
 void destroyDB(Solver::ConstraintDB& db, Solver* s, bool detach);
-
+//! Returns the default decision literal of the given variable.
 inline Literal Solver::defaultLit(Var v) const {
 	switch(strategy_.signDef) {
 		default: // 
-		case SolverStrategies::sign_atom: return Literal(v, !varInfo(v).has(VarInfo::BODY));
+		case SolverStrategies::sign_atom: return Literal(v, !varInfo(v).has(VarInfo::Body));
 		case SolverStrategies::sign_pos : return posLit(v);
 		case SolverStrategies::sign_neg : return negLit(v);
 		case SolverStrategies::sign_rnd : return Literal(v, rng.drand() < 0.5);
-		case SolverStrategies::sign_disj: return Literal(v, !varInfo(v).has(VarInfo::BODY|VarInfo::DISJ));
 	}
 }
+//! Event type optionally emitted after a conflict.
+struct NewConflictEvent : SolveEvent<NewConflictEvent> {
+	NewConflictEvent(const Solver& s, const LitVec& c, const ConstraintInfo& i) : SolveEvent<NewConflictEvent>(s, verbosity_quiet), learnt(&c), info(i) {}
+	const LitVec*  learnt; //!< Learnt conflict clause.
+	ConstraintInfo info;   //!< Additional information associated with the conflict clause. 
+};
 //@}
 
 /**
  * \defgroup heuristic Decision Heuristics
+ * \brief Decision heuristics and related classes.
+ * \ingroup solver
  */
 //@{
-
 //! Base class for decision heuristics to be used in a Solver.
 /*! 
  * During search the decision heuristic is used whenever the DPLL-procedure must pick 
@@ -947,7 +932,7 @@ public:
 	 * The default-implementation is a noop.
 	 * \param s The solver in which this heuristic is used.
 	 */
-	virtual void startInit(const Solver& /* s */) {}  
+	virtual void startInit(const Solver& s) { (void)s; }
 
 	/*!
 	 * Called once after all problem constraints are known to the solver
@@ -955,10 +940,13 @@ public:
 	 * The default-implementation is a noop.
 	 * \param s The solver in which this heuristic is used.
 	 */
-	virtual void endInit(Solver& /* s */) { }
+	virtual void endInit(Solver& s) { (void)s; }
 
 	//! Called once if s switches to a different heuristic.
-	virtual void detach(Solver& /* s */) {}
+	virtual void detach(Solver& s) { (void)s; }
+
+	//! Called if configuration has changed.
+	virtual void setConfig(const HeuParams& p) { (void)p; }
 	
 	/*!
 	 * Called if the state of one or more variables changed. 
@@ -972,7 +960,7 @@ public:
 	 * \param n The range of variables affected, i.e. [v, v+n).
 	 * \note Use s.validVar(v) and s.auxVar(v) to determine the reason for the update.
 	 */
-	virtual void updateVar(const Solver& /* s */, Var /* v */, uint32 /* n */) = 0;
+	virtual void updateVar(const Solver& s, Var v, uint32 n) = 0;
 	
 	/*!
 	 * Called on decision level 0. Variables that are assigned on this level
@@ -983,7 +971,7 @@ public:
 	 * \param s The solver that reached decision level 0.
 	 * \param st The position in the trail of the first new learnt fact.
 	 */
-	virtual void simplify(const Solver& /* s */, LitVec::size_type /* st */) { }
+	virtual void simplify(const Solver& s, LitVec::size_type st) { (void)s; (void)st; }
 	
 	/*!
 	 * Called whenever the solver backracks.
@@ -992,7 +980,7 @@ public:
 	 * \param s The solver that is about to backtrack.
 	 * \param st Position in the trail of the first literal that will be backtracked.
 	 */
-	virtual void undoUntil(const Solver& /* s */, LitVec::size_type /* st */) {}
+	virtual void undoUntil(const Solver& s, LitVec::size_type st) { (void)s; (void)st; }
 	
 	/*!
 	 * Called whenever a new constraint is added to the solver s.
@@ -1003,7 +991,7 @@ public:
 	 * \param t Type of the new constraint.
 	 * \note first points to an array of size size.
 	 */
-	virtual void newConstraint(const Solver&, const Literal* /* first */, LitVec::size_type /* size */, ConstraintType /* t */) {}
+	virtual void newConstraint(const Solver& s, const Literal* first, LitVec::size_type size, ConstraintType t) { (void)s; (void)first; (void)size; (void)t; }
 	
 	/*!
 	 * Called for each new reason-set that is traversed during conflict analysis.
@@ -1015,14 +1003,14 @@ public:
 	 * in lits during the first call to updateReason. On that first call resolveLit
 	 * is the sentinel-literal.
 	 */
-	virtual void updateReason(const Solver& /* s */, const LitVec& /* lits */, Literal /* resolveLit */) {}
+	virtual void updateReason(const Solver& s, const LitVec& lits, Literal resolveLit) { (void)s; (void)lits; (void)resolveLit; }
 
 	//! Shall bump the activity of literals in lits by lits.second * adj.
 	/*!
 	 * The default-implementation is a noop and always returns false.
 	 * \return true if heuristic supports activities, false otherwise.
 	 */
-	virtual bool bump(const Solver& /* s */, const WeightLitVec& /* lits */, double /* adj */) { return false; }
+	virtual bool bump(const Solver& s, const WeightLitVec& lits, double adj) { (void)s; (void)lits; (void)adj; return false; }
 	
 	/*! 
 	 * Called whenever the solver must pick a new variable to branch on. 
@@ -1043,7 +1031,7 @@ public:
 	 *  - a literal that is currently free or
 	 *  - a sentinel literal. In that case, the heuristic shall have asserted a literal!
 	 */ 
-	virtual Literal doSelect(Solver& /* s */) = 0;
+	virtual Literal doSelect(Solver& s) = 0;
 
 	/*! 
 	 * Shall select one of the literals in the range [first, last).
@@ -1053,7 +1041,8 @@ public:
 	 * \pre [first, last) is not empty and all literals in the range are currently unassigned.
 	 * \note The default implementation returns *first.
 	 */
-	virtual Literal selectRange(Solver& /* s */, const Literal* first, const Literal* /* last */) {
+	virtual Literal selectRange(Solver& s, const Literal* first, const Literal* last) {
+		(void)s; (void)last;
 		return *first;
 	}
 	static Literal selectLiteral(Solver& s, Var v, int signScore) {
@@ -1070,15 +1059,14 @@ private:
 	DecisionHeuristic(const DecisionHeuristic&);
 	DecisionHeuristic& operator=(const DecisionHeuristic&);
 };
-
 //! Selects the first free literal w.r.t to the initial variable order.
 class SelectFirst : public DecisionHeuristic {
 public:
-	void updateVar(const Solver& /* s */, Var /* v */, uint32 /* n */) {}
+	void updateVar(const Solver&, Var, uint32) {}
 protected:
 	Literal doSelect(Solver& s);
 };
-
 //@}
 }
 #endif
+

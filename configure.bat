@@ -9,7 +9,7 @@ set BIN_DIR=
 set CONFIG=
 REM CONFIGURATION
 set CXXFLAGS=%CXXFLAGS%
-set LIBS=libclasp libprogram_opts
+set LIBS=libclasp liblp libprogram_opts
 set LDFLAGS=%LDFLAGS%
 set LDLIBS=
 set BUILDPATH=build\release
@@ -169,34 +169,45 @@ RD /S /Q "%BUILDPATH%"
 :CREATEDIR
 MKDIR "%BUILDPATH%\app"
 MKDIR "%BUILDPATH%\bin"
-SET INCLUDES=
-SET LIB_TARGETS=
-FOR %%A IN (%LIBS%) DO (
-	MKDIR "%BUILDPATH%\%%A\lib"
-	SET INCLUDES=-I$^(PROJECT_ROOT^)/%%A !INCLUDES!
-	SET LIB_TARGETS=%%A/lib/%%A.a !LIB_TARGETS!
-)
+cd "%BUILDPATH%"
+
 SET ROOTPATH=../..
 SET TARGET=bin/clasp.exe
-cd "%BUILDPATH%"
+SET INCLUDES=
+SET LIB_TARGETS=
+SET TOOL_PATH=..\..\tools
+SET LIB_MAKES=%TOOL_PATH%\Base.in %TOOL_PATH%\LibRule.in %TOOL_PATH%\BaseRule.in
+SET PRO_MAKES=%TOOL_PATH%\Base.in %TOOL_PATH%\ProjRule.in %TOOL_PATH%\BaseRule.in %TOOL_PATH%\clasp-test.in
+SET LIBS=liblp libprogram_opts libclasp
+rem set up libs
+FOR %%A IN (%LIBS%) DO (
+	set x=%%A
+	MKDIR "%%A\lib"
+ 	SET INCLUDES=-I$^(PROJECT_ROOT^)/%%A !INCLUDES!
+ 	SET LIB_TARGETS=%%A/lib/%%A.a !LIB_TARGETS!
+ 	type %LIB_MAKES% > %%A\Makefile 2>nul
+ 	echo PROJECT_ROOT := %ROOTPATH%/..#      >> %%A\.CONFIG
+ 	echo TARGET       := lib/%%A.a#          >> %%A\.CONFIG
+ 	echo LDLIBS       := %LDLIBS%#           >> %%A\.CONFIG
+	echo FLAGS        := ../FLAGS#           >> %%A\.CONFIG
+	echo INCLUDES     := !INCLUDES!#         >> %%A\.CONFIG
+	echo SOURCE_DIR   := $^(PROJECT_ROOT^)/%%A/src#    >> %%A\.CONFIG
+	echo INCLUDE_DIR  := $^(PROJECT_ROOT^)/%%A/!x:~3!# >> %%A\.CONFIG
+	echo.# >> %%A\.CONFIG
+)
 REM write FLAGS
 if ["%CXX%"]==[""] (
-echo CXX         ?= g++#         >> FLAGS
+	echo CXX         ?= g++#         >> FLAGS
 ) ELSE (
-echo CXX         := %CXX%#       >> FLAGS
+	echo CXX         := %CXX%#       >> FLAGS
 )
 echo CXXFLAGS    := %CXXFLAGS%# >> FLAGS
 echo WARNFLAGS   := -W -Wall#   >> FLAGS
 echo LDFLAGS     := %LDFLAGS%#  >> FLAGS
 echo.#>> FLAGS
 
-REM create Makefiles
-SET TOOL_PATH=..\..\tools
-SET LIB_MAKES=%TOOL_PATH%\Base.in %TOOL_PATH%\LibRule.in %TOOL_PATH%\BaseRule.in
-SET PRO_MAKES=%TOOL_PATH%\Base.in %TOOL_PATH%\ProjRule.in %TOOL_PATH%\BaseRule.in
-FOR %%A IN (%LIBS%) DO type %LIB_MAKES% > %%A\Makefile 2>nul
+REM set up project
 type %PRO_MAKES% > Makefile 2>nul 
-
 REM write project config
 echo PROJECT_ROOT := %ROOTPATH%#           >> .CONFIG
 echo TARGET       := %TARGET%#             >> .CONFIG
@@ -211,22 +222,11 @@ echo LDLIBS       := %LDLIBS%#            >> .CONFIG
 echo INSTALL_DIR  := "%INSTALLPATH%"#     >> .CONFIG
 echo INSTALL      := copy#                >> .CONFIG
 if not [%POST_BUILD%]==[] (
-ECHO POST_BUILD   := %POST_BUILD%#   >> .CONFIG
+	ECHO POST_BUILD   := %POST_BUILD%#   >> .CONFIG
 )
 echo.#>>.CONFIG
 
-REM write lib configs
-FOR %%A IN (%LIBS%) DO (
-set x=%%A
-echo PROJECT_ROOT := %ROOTPATH%/..#      >> %%A\.CONFIG
-echo TARGET       := lib/%%A.a#          >> %%A\.CONFIG
-echo LDLIBS       := %LDLIBS%#           >> %%A\.CONFIG
-echo FLAGS        := ../FLAGS#           >> %%A\.CONFIG
-echo INCLUDES     := !INCLUDES!#         >> %%A\.CONFIG
-echo SOURCE_DIR   := $^(PROJECT_ROOT^)/%%A/src#    >> %%A\.CONFIG
-echo INCLUDE_DIR  := $^(PROJECT_ROOT^)/%%A/!x:~3!# >> %%A\.CONFIG
-echo.# >> %%A\.CONFIG
-)
+
 REM DONE
 
 ECHO.

@@ -18,15 +18,16 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
 #include "test.h"
+#include "lpcompare.h"
 #include <clasp/solver.h>
-#include <clasp/program_builder.h>
+#include <clasp/logic_program.h>
 #include <clasp/unfounded_check.h>
 #include <sstream>
 using namespace std;
 namespace Clasp { namespace Test {
 using namespace Clasp::Asp;
 class DlpBuilderTest : public CppUnit::TestFixture {
-  CPPUNIT_TEST_SUITE(DlpBuilderTest);
+	CPPUNIT_TEST_SUITE(DlpBuilderTest);
 	CPPUNIT_TEST(testSimpleChoice);
 	CPPUNIT_TEST(testNotAChoice);
 	CPPUNIT_TEST(testStillAChoice);
@@ -45,361 +46,284 @@ class DlpBuilderTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testNoDupGamma);
 	CPPUNIT_TEST(testPreNoGamma);
 	CPPUNIT_TEST(testPreNoGamma2);
+	CPPUNIT_TEST(testRecAgg);
 	CPPUNIT_TEST_SUITE_END();	
 public:
+	void setUp() {
+		a = 1, b = 2, c = 3, d = 4, e = 5, f = 6;
+	}
 	void tearDown(){
 		ctx.reset();
 	}
 	void testSimpleChoice() {
-		// a | b.
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		const SymbolTable& index = ctx.symbolTable();
-		CPPUNIT_ASSERT(index[1].lit != index[2].lit);
-		ctx.master()->assume(index[1].lit) && ctx.master()->propagate();
-		CPPUNIT_ASSERT(ctx.master()->isFalse(index[2].lit));
+		lpAdd(lp.start(ctx), "a | b.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		CPPUNIT_ASSERT(lp.getLiteral(a) != lp.getLiteral(b));
+		ctx.master()->assume(lp.getLiteral(a)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(b)));
 		ctx.master()->undoUntil(0);
-		ctx.master()->assume(index[2].lit) && ctx.master()->propagate();
-		CPPUNIT_ASSERT(ctx.master()->isFalse(index[1].lit));
+		ctx.master()->assume(lp.getLiteral(b)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(a)));
 	}
 	void testNotAChoice() {
-		// a | b.
-		// a :- not x.
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "x")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-			.startRule().addHead(1).addToBody(3, false).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		const SymbolTable& index = ctx.symbolTable();
-		CPPUNIT_ASSERT(index[2].lit == index[3].lit);
-		CPPUNIT_ASSERT(index[1].lit == posLit(0));
+		lpAdd(lp.start(ctx), "a | b. a :- not c.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		CPPUNIT_ASSERT(lp.getLiteral(b) == lp.getLiteral(c));
+		CPPUNIT_ASSERT(lp.getLiteral(a) == lit_true());
 	}
 
 	void testStillAChoice() {
-		// a | b.
-		// {b}.
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-			.startRule(CHOICERULE).addHead(2).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		const SymbolTable& index = ctx.symbolTable();
-		CPPUNIT_ASSERT(index[1].lit != index[2].lit);
-		ctx.master()->assume(index[1].lit) && ctx.master()->propagate();
-		CPPUNIT_ASSERT(ctx.master()->isFalse(index[2].lit));
+		lpAdd(lp.start(ctx), "a|b. {b}.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		CPPUNIT_ASSERT(lp.getLiteral(a) != lp.getLiteral(b));
+		ctx.master()->assume(lp.getLiteral(a)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(b)));
 		ctx.master()->undoUntil(0);
-		ctx.master()->assume(index[2].lit) && ctx.master()->propagate();
-		CPPUNIT_ASSERT(ctx.master()->isFalse(index[1].lit));
+		ctx.master()->assume(lp.getLiteral(b)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(a)));
 	}
 
 	void testSubsumedChoice() {
-		// a | b.
-		// a | b | c | d.
-		builder.start(ctx, LogicProgram::AspOptions().iterations(-1))
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c").setAtomName(4, "d")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).addHead(3).addHead(4).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 2);
-		const SymbolTable& index = ctx.symbolTable();
-		CPPUNIT_ASSERT(index[3].lit == negLit(0) || !(ctx.master()->assume(index[3].lit) && ctx.master()->propagate()));
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().iterations(-1)),
+			"a | b.\n"
+			"a | b | c | d.\n");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 2);
+		CPPUNIT_ASSERT(lp.getLiteral(c) == lit_false() || !(ctx.master()->assume(lp.getLiteral(c)) && ctx.master()->propagate()));
 		ctx.master()->undoUntil(0);
-		CPPUNIT_ASSERT(index[4].lit == negLit(0) || !(ctx.master()->assume(index[4].lit) && ctx.master()->propagate()));
+		CPPUNIT_ASSERT(lp.getLiteral(d) == lit_false() || !(ctx.master()->assume(lp.getLiteral(d)) && ctx.master()->propagate()));
 	}
 	
 	void testSubsumedByChoice() {
-		// a | b.
-		// {a,b}.
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-			.startRule(CHOICERULE).addHead(1).addHead(2).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		const SymbolTable& index = ctx.symbolTable();
-		ctx.master()->assume(~index[1].lit) && ctx.master()->propagate();
-		CPPUNIT_ASSERT(ctx.master()->isTrue(index[2].lit));
+		lpAdd(lp.start(ctx), 
+			"a | b.\n"
+			"{a,b}.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		ctx.master()->assume(~lp.getLiteral(a)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(ctx.master()->isTrue(lp.getLiteral(b)));
 	}
 	void testChoiceDisjBug() {
-		// a | b.
-		// {a,b,b}.
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-			.startRule(CHOICERULE).addHead(1).addHead(2).addHead(3).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		const SymbolTable& index = ctx.symbolTable();
-		ctx.master()->assume(index[3].lit) && ctx.master()->propagate();
-		CPPUNIT_ASSERT(ctx.master()->value(index[1].lit.var()) == value_free);
-		CPPUNIT_ASSERT(ctx.master()->value(index[2].lit.var()) == value_free);
-		ctx.master()->assume(~index[1].lit) && ctx.master()->propagate();
-		CPPUNIT_ASSERT(ctx.master()->isTrue(index[2].lit));
+		lpAdd(lp.start(ctx),
+			"a | b.\n"
+			"{a,b,b}.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		
+		ctx.master()->assume(lp.getLiteral(c)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(ctx.master()->value(lp.getLiteral(a).var()) == value_free);
+		CPPUNIT_ASSERT(ctx.master()->value(lp.getLiteral(b).var()) == value_free);
+		ctx.master()->assume(~lp.getLiteral(a)) && ctx.master()->propagate();
+		CPPUNIT_ASSERT(ctx.master()->isTrue(lp.getLiteral(b)));
 		ctx.master()->undoUntil(0);
-		ctx.master()->assume(index[1].lit) && ctx.master()->propagate();
-		ctx.master()->assume(index[2].lit) && ctx.master()->propagate();
-		ctx.master()->assume(index[3].lit) && ctx.master()->propagate();
+		ctx.master()->assume(lp.getLiteral(a)) && ctx.master()->propagate();
+		ctx.master()->assume(lp.getLiteral(b)) && ctx.master()->propagate();
+		ctx.master()->assume(lp.getLiteral(c)) && ctx.master()->propagate();
 		CPPUNIT_ASSERT(!ctx.master()->hasConflict() && ctx.master()->numFreeVars() == 0);
 	}
 
 	void testTautOverOne() {
-		// {x}.
-		// y :- x.
-		// a | x :- y.
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "x").setAtomName(3, "y")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).addToBody(3, true).endRule()
-			.startRule(CHOICERULE).addHead(2).endRule()
-			.startRule().addHead(3).addToBody(2, true).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		const SymbolTable& index = ctx.symbolTable();
-		CPPUNIT_ASSERT(index[1].lit == negLit(0) && !(ctx.master()->assume(index[1].lit) && ctx.master()->propagate()));
+		lpAdd(lp.start(ctx),
+			"{b}.\n"
+			"c :- b.\n"
+			"a | b :- c.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		
+		CPPUNIT_ASSERT(lp.getLiteral(a) == lit_false() && !(ctx.master()->assume(lp.getLiteral(a)) && ctx.master()->propagate()));
 	}
 	
 	void testSimpleLoop() {
-		// a | b.
-		// a :- b.
-		// b :- a.
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-			.startRule().addHead(1).addToBody(2, true).endRule()
-			.startRule().addHead(2).addToBody(1, true).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		ctx.master()->addPost(new DefaultUnfoundedCheck());
+		lpAdd(lp.start(ctx),
+			"a | b."
+			"a :- b."
+			"b :- a.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.sccGraph.get());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		ctx.master()->addPost(new DefaultUnfoundedCheck(*ctx.sccGraph));
 		CPPUNIT_ASSERT_EQUAL(true, ctx.endInit());
-		const SymbolTable& index = ctx.symbolTable();
-		CPPUNIT_ASSERT(index[1].lit != index[2].lit);
-		CPPUNIT_ASSERT(ctx.master()->assume(index[1].lit) && ctx.master()->propagate());
-		CPPUNIT_ASSERT(!ctx.master()->isFalse(index[2].lit));
+		
+		CPPUNIT_ASSERT(lp.getLiteral(a) != lp.getLiteral(b));
+		CPPUNIT_ASSERT(ctx.master()->assume(lp.getLiteral(a)) && ctx.master()->propagate());
+		CPPUNIT_ASSERT(!ctx.master()->isFalse(lp.getLiteral(b)));
 		ctx.master()->undoUntil(0);
-		CPPUNIT_ASSERT(ctx.master()->assume(index[2].lit) && ctx.master()->propagate());
-		CPPUNIT_ASSERT(!ctx.master()->isFalse(index[1].lit));
+		CPPUNIT_ASSERT(ctx.master()->assume(lp.getLiteral(b)) && ctx.master()->propagate());
+		CPPUNIT_ASSERT(!ctx.master()->isFalse(lp.getLiteral(a)));
 	}
 
 	void testSimpleLoopNoGamma() {
-		// a | b.
-		// a :- b.
-		// b :- a.
-		builder.start(ctx, LogicProgram::AspOptions().disableGamma())
-			.setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-			.startRule().addHead(1).addToBody(2, true).endRule()
-			.startRule().addHead(2).addToBody(1, true).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		const SymbolTable& index = ctx.symbolTable();
-		CPPUNIT_ASSERT(!(ctx.master()->assume(~index[1].lit) && ctx.master()->propagate()) || ctx.master()->isTrue(index[2].lit));
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().disableGamma()),
+			"a | b.\n"
+			"a :- b.\n"
+			"b :- a.\n");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		
+		CPPUNIT_ASSERT(!(ctx.master()->assume(~lp.getLiteral(a)) && ctx.master()->propagate()) || ctx.master()->isTrue(lp.getLiteral(b)));
 	}
 	void testComputeTrue() {
-		// a | x.
-		// :- not a.
-		// a :- x.
-		builder.start(ctx, LogicProgram::AspOptions().noScc())
-			.setAtomName(1, "a").setAtomName(2, "x")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-			.startRule().addHead(1).addToBody(2, true).endRule()
-			.setCompute(1, true);
-		;
-		CPPUNIT_ASSERT(builder.getAtom(1)->value() == value_true);
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		const SymbolTable& index = ctx.symbolTable();
-		CPPUNIT_ASSERT(ctx.master()->isTrue(index[1].lit));
-		CPPUNIT_ASSERT(ctx.master()->isFalse(index[2].lit));
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().noScc()),
+			"a | b.\n"
+			"a :- b.\n"
+			":- not a.\n");
+		CPPUNIT_ASSERT(lp.getAtom(a)->value() == value_true);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		
+		CPPUNIT_ASSERT(ctx.master()->isTrue(lp.getLiteral(a)));
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(b)));
 	}
 	void testComputeFalse() {
-		// a | b | x.
-		// :- a.
-		// a :- x.
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "x")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).addHead(3).endRule()
-			.startRule().addHead(1).addToBody(3, true).endRule()
-			.setCompute(1, false);
-		;
-		CPPUNIT_ASSERT(builder.getAtom(1)->value() == value_false);
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		const SymbolTable& index = ctx.symbolTable();
-		CPPUNIT_ASSERT(ctx.master()->isFalse(index[1].lit));
-		CPPUNIT_ASSERT(ctx.master()->isFalse(index[3].lit));
-		CPPUNIT_ASSERT(ctx.master()->isTrue(index[2].lit));
+		lpAdd(lp.start(ctx),
+			"a | b | c.\n"
+			"a :- c.\n"
+			" :- a.");
+		CPPUNIT_ASSERT(lp.getAtom(a)->value() == value_false);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(a)));
+		CPPUNIT_ASSERT(ctx.master()->isFalse(lp.getLiteral(c)));
+		CPPUNIT_ASSERT(ctx.master()->isTrue(lp.getLiteral(b)));
 	}
 	void testIncremental() {
-		// Step 0:
-		// a | b :- x.
-		// a :- b.
-		// b :- a.
-		// freeze x.
-		builder.start(ctx);
-		builder.updateProgram();
-		builder.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "x")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).addToBody(3,true).endRule()
-			.startRule().addHead(1).addToBody(2, true).endRule()
-			.startRule().addHead(2).addToBody(1, true).endRule()
-			.freeze(3);
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		CPPUNIT_ASSERT(builder.stats.sccs == 1);
-		CPPUNIT_ASSERT(builder.stats.nonHcfs == 1);
+		lp.start(ctx);
+		lp.updateProgram();
+		lpAdd(lp,
+			"% Step 0:\n"
+			"a | b :- c.\n"
+			"a :- b.\n"
+			"b :- a.\n"
+			"#external c.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
+		CPPUNIT_ASSERT(lp.stats.nonHcfs == 1);
 
-		// Step 1:
-		// c | d :- a, y.
-		// c :- d, b.
-		// d :- c, a.
-		// freeze y.
-		builder.update();
-		builder.setAtomName(4, "c").setAtomName(5, "d").setAtomName(6, "y")
-			.startRule(DISJUNCTIVERULE).addHead(4).addHead(5).addToBody(1,true).addToBody(6,true).endRule()
-			.startRule().addHead(4).addToBody(5, true).addToBody(2, true).endRule()
-			.startRule().addHead(5).addToBody(4, true).addToBody(1, true).endRule()
-			.freeze(6);
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		CPPUNIT_ASSERT(builder.stats.sccs == 1);
-		CPPUNIT_ASSERT(builder.stats.nonHcfs == 1);
+		lp.update();
+		lpAdd(lp, 
+			"% Step 1:\n"
+			"d | e :- a, f.\n"
+			"d :- e, b.\n"
+			"e :- d, a.\n"
+			"#external f.\n");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
+		CPPUNIT_ASSERT(lp.stats.nonHcfs == 1);
 	}
 
 	void testSimplify() {
-		// a | b :- x.
-		// a :- b.
-		// b :- c.
-		// c :- a,y.
-		// {x,y}.
-		builder.start(ctx);
-		builder.updateProgram();
-		builder.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c").setAtomName(4, "x").setAtomName(5, "y")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).addToBody(4,true).endRule()
-			.startRule().addHead(1).addToBody(2, true).endRule()
-			.startRule().addHead(2).addToBody(3, true).endRule()
-			.startRule().addHead(3).addToBody(1, true).addToBody(5,true).endRule()
-			.startRule(Asp::CHOICERULE).addHead(4).addHead(5).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(builder.stats.rules(DISJUNCTIVERULE).first == 1);
-		CPPUNIT_ASSERT(builder.stats.sccs == 1);
-		CPPUNIT_ASSERT(builder.stats.nonHcfs == 1);
+		lp.start(ctx);
+		lp.updateProgram();
+		lpAdd(lp,
+			"a | b :- d.\n"
+			"a :- b.\n"
+			"b :- c.\n"
+			"c :- a,e.\n"
+			"{d,e}.\n");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		CPPUNIT_ASSERT(lp.stats.sccs == 1);
+		CPPUNIT_ASSERT(lp.stats.nonHcfs == 1);
 		DG& graph = *ctx.sccGraph;
 		CPPUNIT_ASSERT(graph.numNonHcfs() == 1);
-		ctx.addUnary(~builder.getAtom(1)->literal());
+		ctx.addUnary(~lp.getLiteral(a));
 		ctx.master()->propagate();
 		graph.simplify(*ctx.master());
 		CPPUNIT_ASSERT(graph.numNonHcfs() == 0);
 	}
 	void testSimplifyNoRemove() {
 		ctx.setConcurrency(2);
-		BasicSatConfig tester;
-		tester.shortMode = ContextParams::short_explicit;
-		builder.start(ctx);
-		builder.setNonHcfConfiguration(&tester);
-		builder.updateProgram();
-		builder.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c").setAtomName(4, "x").setAtomName(5, "y")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).addToBody(4,true).endRule()
-			.startRule().addHead(1).addToBody(2, true).endRule()
-			.startRule().addHead(2).addToBody(3, true).endRule()
-			.startRule().addHead(3).addToBody(1, true).addToBody(5,true).endRule()
-			.startRule(Asp::CHOICERULE).addHead(4).addHead(5).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
-		Solver& s2= ctx.addSolver();
+		lp.start(ctx);
+		lp.updateProgram();
+		lpAdd(lp,
+			"a | b :- d.\n"
+			"a :- b.\n"
+			"b :- c.\n"
+			"c :- a,e.\n"
+			"{d,e}.\n");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		Solver& s2= ctx.pushSolver();
 		CPPUNIT_ASSERT(ctx.endInit(true));
 		DG& graph = *ctx.sccGraph;
 		CPPUNIT_ASSERT(graph.numNonHcfs() == 1);
-		Literal u = ~builder.getAtom(1)->literal();
-		ctx.master()->add(ClauseRep::create(&u, 1, Constraint_t::learnt_conflict));
+		Literal u = ~lp.getLiteral(a);
+		ctx.master()->add(ClauseRep::create(&u, 1, Constraint_t::Conflict));
 		ctx.master()->simplify() && s2.simplify();
+		graph.simplify(*ctx.master());
+		graph.simplify(s2);
 		CPPUNIT_ASSERT(graph.numNonHcfs() == 1);
-		const DG::ComponentPair& c = *graph.nonHcfBegin();
-
-		CPPUNIT_ASSERT_EQUAL(false, c.second->simplify(c.first, *ctx.master()));
-		CPPUNIT_ASSERT_EQUAL(true , c.second->simplify(c.first, s2));
-
+		const DG::NonHcfComponent* c = *graph.nonHcfBegin();
+		
 		LitVec temp;
 		VarVec ufs;
-		c.second->assumptionsFromAssignment(*ctx.master(), temp);
-		CPPUNIT_ASSERT_EQUAL(true, c.second->test(c.first, *ctx.master(), temp, ufs) && ufs.empty());
+		c->assumptionsFromAssignment(*ctx.master(), temp);
+		CPPUNIT_ASSERT_EQUAL(true, c->test(*ctx.master(), temp, ufs) && ufs.empty());
 
 		temp.clear();
-		c.second->assumptionsFromAssignment(s2, temp);
-		CPPUNIT_ASSERT_EQUAL(true, c.second->test(c.first, s2, temp, ufs) && ufs.empty());
+		c->assumptionsFromAssignment(s2, temp);
+		CPPUNIT_ASSERT_EQUAL(true, c->test(s2, temp, ufs) && ufs.empty());
 	}
 	void testNoDupGamma() {
-		// a | b.
-		// a :- b.
-		// b :- a.
-		// a :- not b.
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-			.startRule().addHead(1).addToBody(2, true).endRule()
-			.startRule().addHead(2).addToBody(1, true).endRule()
-			.startRule().addHead(1).addToBody(2, false).endRule()
-			;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
-		CPPUNIT_ASSERT(builder.numBodies() == 5); // + b :- not a.
-		CPPUNIT_ASSERT(builder.stats.gammas == 1);
-		stringstream  str;
-		builder.write(str);
-		std::string x = str.str();
-		std::size_t p = x.find("1 1 1 1 2");
-		CPPUNIT_ASSERT(p != std::string::npos);
-		p = x.find("1 1 1 1 2", p + std::strlen("1 1 1 1 2") + 1);
-		CPPUNIT_ASSERT(p == std::string::npos);
+		lpAdd(lp.start(ctx),
+			"a | b.\n"
+			"a :- b.\n"
+			"b :- a.\n"
+			"a :- not b.\n");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		CPPUNIT_ASSERT(lp.numBodies() == 5); // + b :- not a.
+		CPPUNIT_ASSERT(lp.stats.gammas == 1);
+		std::stringstream exp("1 1 1 1 2\n1 1 1 1 2");
+		CPPUNIT_ASSERT_EQUAL(false, findSmodels(exp, lp));
 	}
 	void testPreNoGamma() {
-		// a | b.
-		// a :- b.
-		// b :- a.
-		builder.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-			.startRule().addHead(1).addToBody(2, true).endRule()
-			.startRule().addHead(2).addToBody(1, true).endRule()
-			;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
-		stringstream  str;
-		builder.write(str);
-		CPPUNIT_ASSERT(str.str().find("1 1 1 1 2") == std::string::npos);
+		lpAdd(lp.start(ctx),
+			"a | b.\n"
+			"a :- b.\n"
+			"b :- a.\n");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		std::stringstream exp("1 1 1 1 2");
+		CPPUNIT_ASSERT_EQUAL(false, findSmodels(exp, lp));
 	}
 	void testPreNoGamma2() {
-		// a | b.
-		// a :- b.
-		// b :- a.
-		builder.start(ctx, LogicProgram::AspOptions().disableGamma())
-			.setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(DISJUNCTIVERULE).addHead(1).addHead(2).endRule()
-			.startRule().addHead(1).addToBody(2, true).endRule()
-			.startRule().addHead(2).addToBody(1, true).endRule()
-			;
-		CPPUNIT_ASSERT_EQUAL(true, builder.endProgram());
-		stringstream  str;
-		builder.write(str);
-		CPPUNIT_ASSERT(str.str().find("3 2 1 2 0 0") == std::string::npos);
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().disableGamma()),
+			"a | b.\n"
+			"a :- b.\n"
+			"b :- a.\n");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		std::stringstream exp("3 2 1 2 0 0");
+		CPPUNIT_ASSERT_EQUAL(false, findSmodels(exp, lp));
+	}
+	void testRecAgg() {
+		lpAdd(lp.start(ctx),
+			"{c}.\n"
+			"a | b.\n"
+			"a :- 1 {c, b}.\n"
+			"b :- 1 {c, a}.");
+		CPPUNIT_ASSERT(lp.stats.disjunctions[0] == 1);
+		CPPUNIT_ASSERT(lp.stats.bodies[0][Body_t::Count] == 2);
+		std::stringstream exp("2 2 2 0 1 3 1");
+		CPPUNIT_ASSERT_EQUAL(true, findSmodels(exp, lp));
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		exp.clear(); exp.seekg(0);
+		std::stringstream str;
+		AspParser::write(lp, str, AspParser::format_smodels);
+		CPPUNIT_ASSERT_EQUAL(false, findProgram(exp, str));
+		exp.clear();  exp.str("");
+		str.clear(); str.seekg(0);
+		exp << "1 1 1 0 3\n" << "1 2 1 0 3\n";
+		CPPUNIT_ASSERT_EQUAL(true, findProgram(exp, str));
 	}
 private:
-	typedef SharedDependencyGraph DG;
+	typedef Asp::PrgDepGraph DG;
 	SharedContext ctx;
-	LogicProgram  builder;
-	stringstream  str;
+	LogicProgram  lp;
+	Var           a, b, c, d, e, f;
 };
 CPPUNIT_TEST_SUITE_REGISTRATION(DlpBuilderTest);
  } } 
+

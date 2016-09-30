@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2013 Benjamin Kaufmann
+// Copyright (c) 2013-2016, Benjamin Kaufmann
 //
 // This file is part of Clasp. See http://www.cs.uni-potsdam.de/clasp/
 //
@@ -26,49 +26,85 @@
 #include <clasp/clause.h>
 #include <clasp/dependency_graph.h>
 #include <clasp/parser.h>
+#include <potassco/theory_data.h>
 #include <stdexcept>
-#include <sstream>
-#include <climits>
+#include <cctype>
+#include <cstdio>
 namespace Clasp { namespace Asp {
 /////////////////////////////////////////////////////////////////////////////////////////
-// class LpStats
+// Statistics
 /////////////////////////////////////////////////////////////////////////////////////////
+#define RK(x) RuleStats::x
+const char* RuleStats::toStr(int k) {
+	CLASP_FAIL_IF(k < 0 || uint32(k) > numKeys(), "Invalid key");
+	switch (k) {
+		case Normal   : return "Normal";
+		case Choice   : return "Choice";
+		case Minimize : return "Minimize";
+		case Acyc     : return "Acyc";
+		case Heuristic: return "Heuristic";
+		default:        return "None";
+	}
+}
+uint32 RuleStats::sum() const {
+	return std::accumulate(key, key + numKeys(), uint32(0));
+}
+const char* BodyStats::toStr(int t) {
+	CLASP_FAIL_IF(t < 0 || uint32(t) >= numKeys(), "Invalid body type!");
+	switch (t) {
+		default           : return "Normal";
+		case Body_t::Count: return "Count";
+		case Body_t::Sum  : return "Sum";
+	}
+}
+uint32 BodyStats::sum() const {
+	return std::accumulate(key, key + numKeys(), uint32(0));
+}
+
+namespace {
+template <unsigned i>
+double sumBodies(const LpStats* self) { return self->bodies[i].sum(); }
+template <unsigned i>
+double sumRules(const LpStats* self) { return self->rules[i].sum(); }
+double sumEqs(const LpStats* self)   { return self->eqs(); }
+}
 #define LP_STATS( APPLY )                                        \
-	APPLY("bodies"              , bodies)                        \
-	APPLY("atoms"               , atoms)                         \
-	APPLY("atoms_aux"           , auxAtoms)                      \
-	APPLY("sccs"                , sccs)                          \
-	APPLY("sccs_non_hcf"        , nonHcfs)                       \
-	APPLY("gammas"              , gammas)                        \
-	APPLY("ufs_nodes"           , ufsNodes)                      \
-	APPLY("rules"               , rules())                       \
-	APPLY("rules_basic"         , rules(BASICRULE).first)        \
-	APPLY("rules_choice"        , rules(CHOICERULE).first)       \
-	APPLY("rules_constraint"    , rules(CONSTRAINTRULE).first)   \
-	APPLY("rules_weight"        , rules(WEIGHTRULE).first)       \
-	APPLY("rules_disjunctive"   , rules(DISJUNCTIVERULE).first)  \
-	APPLY("rules_optimize"      , rules(OPTIMIZERULE).first)     \
-	APPLY("rules_tr_basic"      , rules(BASICRULE).second)       \
-	APPLY("rules_tr_choice"     , rules(CHOICERULE).second)      \
-	APPLY("rules_tr_constraint" , rules(CONSTRAINTRULE).second)  \
-	APPLY("rules_tr_weight"     , rules(WEIGHTRULE).second)      \
-	APPLY("rules_tr_disjunctive", rules(DISJUNCTIVERULE).second) \
-	APPLY("rules_tr_optimize"   , rules(OPTIMIZERULE).second)    \
-	APPLY("eqs"                 , eqs())                         \
-	APPLY("eqs_atom"            , eqs(Var_t::atom_var))          \
-	APPLY("eqs_body"            , eqs(Var_t::body_var))          \
-	APPLY("eqs_other"           , eqs(Var_t::atom_body_var))
+	APPLY("atoms"               , VALUE(atoms))                  \
+	APPLY("atoms_aux"           , VALUE(auxAtoms))               \
+	APPLY("disjunctions"        , VALUE(disjunctions[0]))        \
+	APPLY("disjunctions_non_hcf", VALUE(disjunctions[1]))        \
+	APPLY("bodies"              , FUNC(sumBodies<0>))            \
+	APPLY("bodies_tr"           , FUNC(sumBodies<1>))            \
+	APPLY("sum_bodies"          , VALUE(bodies[0][Body_t::Sum])) \
+	APPLY("sum_bodies_tr"       , VALUE(bodies[1][Body_t::Sum])) \
+	APPLY("count_bodies"        , VALUE(bodies[0][Body_t::Count]))\
+	APPLY("count_bodies_tr"     , VALUE(bodies[1][Body_t::Count]))\
+	APPLY("sccs"                , VALUE(sccs))                   \
+	APPLY("sccs_non_hcf"        , VALUE(nonHcfs))                \
+	APPLY("gammas"              , VALUE(gammas))                 \
+	APPLY("ufs_nodes"           , VALUE(ufsNodes))               \
+	APPLY("rules"               , FUNC(sumRules<0>))             \
+	APPLY("rules_normal"        , VALUE(rules[0][RK(Normal)]))   \
+	APPLY("rules_choice"        , VALUE(rules[0][RK(Choice)]))   \
+	APPLY("rules_minimize"      , VALUE(rules[0][RK(Minimize)])) \
+	APPLY("rules_acyc"          , VALUE(rules[0][RK(Acyc)]))     \
+	APPLY("rules_heuristic"     , VALUE(rules[0][RK(Heuristic)]))\
+	APPLY("rules_tr"            , FUNC(sumRules<1>))             \
+	APPLY("rules_tr_normal"     , VALUE(rules[1][RK(Normal)]))   \
+	APPLY("rules_tr_choice"     , VALUE(rules[1][RK(Choice)]))   \
+	APPLY("rules_tr_minimize"   , VALUE(rules[1][RK(Minimize)])) \
+	APPLY("rules_tr_acyc"       , VALUE(rules[1][RK(Acyc)]))     \
+	APPLY("rules_tr_heuristic"  , VALUE(rules[1][RK(Heuristic)]))\
+	APPLY("eqs"                 , FUNC(sumEqs))                  \
+	APPLY("eqs_atom"            , VALUE(eqs_[Var_t::Atom-1]))    \
+	APPLY("eqs_body"            , VALUE(eqs_[Var_t::Body-1]))    \
+	APPLY("eqs_other"           , VALUE(eqs_[Var_t::Hybrid-1]))
 
 void LpStats::reset() {
 	std::memset(this, 0, sizeof(LpStats));
 }
-uint32 LpStats::rules() const {
-	uint32 sum = 0;
-	for (uint32 i = 0; i != NUM_RULE_TYPES; ++i) { sum += rules_[i].second; }
-	return sum;
-}
+
 void LpStats::accu(const LpStats& o) {
-	bodies   += o.bodies;
 	atoms    += o.atoms;
 	auxAtoms += o.auxAtoms;
 	ufsNodes += o.ufsNodes;
@@ -80,44 +116,65 @@ void LpStats::accu(const LpStats& o) {
 		sccs   += o.sccs;
 		nonHcfs+= o.nonHcfs;
 	}
+	for (int i = 0; i != 2; ++i) {
+		disjunctions[i] += o.disjunctions[i];
+		for (uint32 k = 0; k != BodyStats::numKeys(); ++k) {
+			bodies[i][k] += o.bodies[i][k];
+		}
+		for (uint32 k = 0; k != RuleStats::numKeys(); ++k) {
+			rules[i][k] += o.rules[i][k];
+		}
+	}
 	for (int i = 0; i != sizeof(eqs_)/sizeof(eqs_[0]); ++i) {
 		eqs_[i] += o.eqs_[i];
 	}
-	for (int i = 0; i != sizeof(rules_)/sizeof(rules_[0]); ++i) {
-		rules_[i].first  += o.rules_[i].first;
-		rules_[i].second += o.rules_[i].second;
-	}
 }
 
-double LpStats::operator[](const char* key) const {
-#define MAP_IF(x, A) if (std::strcmp(key, x) == 0)  return double( (A) );
-	LP_STATS(MAP_IF)
-#undef MAP_IF
-	return -1.0;
-}
-const char* LpStats::keys(const char* path) {
-	if (!path || !*path) {
-#define KEY(x, y) x "\0"
-		return LP_STATS(KEY);
+static const char* lpStats_s[] = {
+#define KEY(x, y) x,
+	LP_STATS(KEY)
 #undef KEY
-	}
-	return 0;
+	"lp"
+};
+uint32 LpStats::size() {
+	return (sizeof(lpStats_s)/sizeof(const char*))-1;
+}
+const char* LpStats::key(uint32 i) {
+	return i < size() ? lpStats_s[i] : throw std::out_of_range("LpStats::key");
+}
+StatisticObject LpStats::at(const char* k) const {
+#define MAP_IF(x, A) if (std::strcmp(k, x) == 0)  return A;
+#define VALUE(X) StatisticObject::value(&(X))
+#define FUNC(F) StatisticObject::value<LpStats, F>(this)
+	LP_STATS(MAP_IF)
+#undef VALUE
+#undef FUNC
+#undef MAP_IF
+	throw std::out_of_range("LpStats::at");
 }
 #undef LP_STATS
 /////////////////////////////////////////////////////////////////////////////////////////
 // class LogicProgram
 /////////////////////////////////////////////////////////////////////////////////////////
+static PrgAtom trueAtom_g(0, false);
+static const uint32 falseId = PrgNode::noNode;
+static const uint32 bodyId  = PrgNode::noNode + 1;
+static bool init_trueAtom_g = (trueAtom_g.setEq(0), true);
+inline bool isAtom(Id_t uid) { return Potassco::atom(Potassco::lit(uid)) < bodyId; }
+inline bool isBody(Id_t uid) { return Potassco::atom(Potassco::lit(uid)) >= bodyId; }
+inline Id_t nodeId(Id_t uid) { return Potassco::atom(Potassco::lit(uid)) - (isAtom(uid) ? 0 : bodyId); }
+inline bool signId(Id_t uid) { return Potassco::lit(uid) < 0; }
+
 namespace {
 struct LessBodySize {
 	LessBodySize(const BodyList& bl) : bodies_(&bl) {}
-	bool operator()(Var b1, Var b2 ) const {
+	bool operator()(Id_t b1, Id_t b2 ) const {
 		return (*bodies_)[b1]->size() < (*bodies_)[b2]->size()
 			|| ((*bodies_)[b1]->size() == (*bodies_)[b2]->size() && (*bodies_)[b1]->type() < (*bodies_)[b2]->type());
 	}
 private:
 	const BodyList* bodies_;
 };
-
 // Adds nogoods representing this node to the solver.
 template <class NT>
 bool toConstraint(NT* node, const LogicProgram& prg, ClauseCreator& c) {
@@ -127,90 +184,92 @@ bool toConstraint(NT* node, const LogicProgram& prg, ClauseCreator& c) {
 	return !node->relevant() || node->addConstraints(prg, c);
 }
 }
-LogicProgram::LogicProgram() : nonHcfCfg_(0), minimize_(0), incData_(0), startAux_(0) { accu = 0; }
+
+LogicProgram::LogicProgram() : theory_(0), input_(1, UINT32_MAX), auxData_(0), incData_(0) {
+	CLASP_FAIL_IF(!init_trueAtom_g, "invalid static init");
+}
 LogicProgram::~LogicProgram() { dispose(true); }
-LogicProgram::Incremental::Incremental() : startAtom(1), startScc(0) {}
+LogicProgram::Incremental::Incremental() : startScc(0) {}
 void LogicProgram::dispose(bool force) {
 	// remove rules
-	std::for_each( bodies_.begin(), bodies_.end(), DestroyObject() );
-	std::for_each( disjunctions_.begin(), disjunctions_.end(), DestroyObject() );
-	AtomList().swap(sccAtoms_);
+	std::for_each(bodies_.begin(), bodies_.end(), DestroyObject());
+	std::for_each(disjunctions_.begin(), disjunctions_.end(), DestroyObject());
+	std::for_each(extended_.begin(), extended_.end(), DeleteObject());
+	std::for_each(minimize_.begin(), minimize_.end(), DeleteObject());
+	PodVector<ShowPair>::destruct(show_);
+	delete auxData_; auxData_ = 0;
+	MinList().swap(minimize_);
+	RuleList().swap(extended_);
 	BodyList().swap(bodies_);
 	DisjList().swap(disjunctions_);
 	bodyIndex_.clear();
 	disjIndex_.clear();
-	for (MinimizeRule* r = minimize_, *t; r; ) {
-		t = r;
-		r = r->next_;
-		delete t;
-	}
-	minimize_ = 0;
-	for (RuleList::size_type i = 0; i != extended_.size(); ++i) {
-		delete extended_[i];
-	}
-	extended_.clear();
 	VarVec().swap(initialSupp_);
-	rule_.clear();
+	if (theory_) {
+		theory_->reset();
+	}
 	if (force || !incData_) {
-		std::for_each( atoms_.begin(), atoms_.end(), DeleteObject() );
+		deleteAtoms(0);
 		AtomList().swap(atoms_);
+		AtomState().swap(atomState_);
+		delete theory_;
 		delete incData_;
 		VarVec().swap(propQ_);
-		ruleState_.clearAll();
 		stats.reset();
-		startAux_ = atoms_.size();
 	}
-	else {
-		// make sure that we have a reference to any minimize constraint
-		getMinimizeConstraint();
+	rule_.clear();
+}
+void LogicProgram::deleteAtoms(uint32 start) {
+	for (AtomList::const_iterator it = atoms_.begin() + start, end = atoms_.end(); it != end; ++it) {
+		if (*it != &trueAtom_g) { delete *it; }
 	}
-	activeHead_.clear();
-	activeBody_.reset();
 }
 bool LogicProgram::doStartProgram() {
 	dispose(true);
-	// atom 0 is always false
-	atoms_.push_back( new PrgAtom(0, false) );
-	assignValue(getAtom(0), value_false);
-	getFalseAtom()->setLiteral(negLit(0));
-	nonHcfCfg_= 0;
-	incData_  = 0;
-	ctx()->symbolTable().clear();
-	ctx()->symbolTable().startInit(SymbolTable::map_indirect);
+	// atom 0 is always true
+	PrgAtom* trueAt = new PrgAtom(0, false);
+	atoms_.push_back(trueAt);
+	trueAt->assignValue(value_true);
+	trueAt->setInUpper(true);
+	trueAt->setLiteral(lit_true());
+	atomState_.set(0, AtomState::fact_flag);
+	incData_ = 0;
+	auxData_ = new Aux();
+	input_   = AtomRange(1, UINT32_MAX);
+	statsId_ = 0;
 	return true;
 }
 void LogicProgram::setOptions(const AspOptions& opts) {
 	opts_ = opts;
-	if (opts.suppMod) {
-		if (!incData_ || incData_->startScc == 0) {
-			if (opts_.iters && ctx()) { ctx()->report(warning(Event::subsystem_prepare, "'supp-models' implies 'eq=0'.")); }
-			opts_.supportedModels();
-		}
-		else {
-			if (ctx()) { ctx()->report(warning(Event::subsystem_facade, "'supp-models' ignored for non-tight programs.")); }
-			opts_.suppMod = 0;
-			opts_.noSCC   = 0;
-		}
+	if (opts.suppMod) { opts_.noSCC = 1; }
+	if (opts.suppMod && ctx() && ctx()->sccGraph.get()) {
+		ctx()->warn("'supp-models' ignored for non-tight programs.");
+		opts_.suppMod = 0;
+		opts_.noSCC   = 0;
 	}
 }
-bool LogicProgram::doParse(StreamSource& prg) { return DefaultLparseParser(*this).parse(prg); }
+ProgramParser* LogicProgram::doCreateParser() {
+	return new AspParser(*this);
+}
 bool LogicProgram::doUpdateProgram() {
-	if (!incData_) { incData_ = new Incremental(); ctx()->symbolTable().incremental(true); }
+	if (!incData_) { incData_ = new Incremental(); }
 	if (!frozen()) { return true; }
 	// delete bodies/disjunctions...
 	dispose(false);
 	setFrozen(false);
+	auxData_ = new Aux();
+	if (theory_) { theory_->update(); }
 	incData_->update.clear();
 	incData_->frozen.swap(incData_->update);
-	ctx()->symbolTable().startInit(SymbolTable::map_indirect);
-	// reset prop queue and add supported atoms from previous steps 
+	input_.hi = std::min(input_.hi, endAtom());
+	// reset prop queue and add supported atoms from previous steps
 	// {ai | ai in P}.
-	PrgBody* support = startAux_ > 1 ? getBodyFor(activeBody_) : 0;
-	propQ_.assign(1, getFalseId());
-	for (Var i = 1, end = startAux_; i != end; ++i) {
-		if (getEqAtom(i) >= startAux_) {
+	PrgBody* support = input_.hi > 1 ? getTrueBody() : 0;
+	propQ_.clear();
+	for (Atom_t i = 1, end = startAuxAtom(); i != end; ++i) {
+		if (getRootId(i) >= end) {
 			// atom is equivalent to some aux atom - make i the new root
-			uint32 r = getEqAtom(i);
+			uint32 r = getRootId(i);
 			std::swap(atoms_[i], atoms_[r]);
 			atoms_[r]->setEq(i);
 		}
@@ -226,211 +285,309 @@ bool LogicProgram::doUpdateProgram() {
 			if (ctx()->master()->value(a->var()) != value_free && !a->frozen()) {
 				v = ctx()->master()->isTrue(a->literal()) ? value_true : value_false;
 			}
-			if (v != value_free) { assignValue(a, v); }
+			if (v != value_free) { assignValue(a, v, PrgEdge::noEdge()); }
 			if (!a->frozen() && a->value() != value_false) {
 				a->setIgnoreScc(true);
-				support->addHead(a, PrgEdge::CHOICE_EDGE);
+				support->addHead(a, PrgEdge::GammaChoice);
 			}
 		}
 		else if (a->removed() || (!a->eq() && a->value() == value_false)) {
-			a->setEq(getFalseId());
+			a->resetId(i, true);
+			a->setValue(value_false);
+			atomState_.set(i, AtomState::false_flag);
 		}
 	}
 	// delete any introduced aux atoms
 	// this is safe because aux atoms are never part of the input program
 	// it is necessary in order to free their ids, i.e. the id of an aux atom
 	// from step I might be needed for a program atom in step I+1
-	std::for_each(atoms_.begin()+startAux_, atoms_.end(), DeleteObject());
-	atoms_.erase(atoms_.begin()+startAux_, atoms_.end());
-	incData_->startAtom = startAux_ = (uint32)atoms_.size();
+	deleteAtoms(startAuxAtom());
+	atoms_.erase(atoms_.begin()+startAuxAtom(), atoms_.end());
+	uint32 nAtoms = (uint32)atoms_.size();
+	atomState_.resize(nAtoms);
+	input_ = AtomRange(nAtoms, UINT32_MAX);
 	stats.reset();
+	statsId_ = 0;
 	return true;
 }
 bool LogicProgram::doEndProgram() {
 	if (!frozen() && ctx()->ok()) {
 		prepareProgram(!opts_.noSCC);
 		addConstraints();
-		if (accu) { accu->accu(stats); }
+		addDomRules();
+		addAcycConstraint();
 	}
 	return ctx()->ok();
 }
 
-bool LogicProgram::clone(SharedContext& oCtx, bool shareSymbols) {
+bool LogicProgram::clone(SharedContext& oCtx) {
 	assert(frozen());
 	if (&oCtx == ctx()) {
 		return true;
 	}
-	oCtx.cloneVars(*ctx(), shareSymbols ? SharedContext::init_share_symbols : SharedContext::init_copy_symbols);
+	for (Var v = oCtx.numVars() + 1; ctx()->validVar(v); ++v) {
+		oCtx.addVar(Var_t::Atom, ctx()->varInfo(v).rep);
+	}
 	SharedContext* t = ctx();
 	setCtx(&oCtx);
-	bool r = addConstraints();
+	bool ok = addConstraints();
+	if (ok) {
+		oCtx.output    = ctx()->output;
+		oCtx.heuristic = t->heuristic;
+	}
 	setCtx(t);
-	return r;
+	return ok;
 }
 
 void LogicProgram::addMinimize() {
 	CLASP_ASSERT_CONTRACT(frozen());
-	if (hasMinimize()) {
-		if (opts_.iters != 0) { simplifyMinimize(); }
-		WeightLitVec lits;
-		for (MinimizeRule* r = minimize_; r; r = r->next_) {
-			for (WeightLitVec::iterator it = r->lits_.begin(); it != r->lits_.end(); ++it) {
-				PrgAtom* h = resize(it->first.var()); // checks for eq
-				lits.push_back(WeightLiteral(it->first.sign() ? ~h->literal() : h->literal(), it->second));
-			}
-			addMinRule(lits);
-			lits.clear();
+	for (MinList::iterator it = minimize_.begin(), end = minimize_.end(); it != end; ++it) {
+		const LpWLitVec& lits = (*it)->lits;
+		const weight_t   prio = (*it)->prio;
+		for (LpWLitVec::const_iterator xIt = lits.begin(), xEnd = lits.end(); xIt != xEnd; ++xIt) {
+			addMinLit(prio, WeightLiteral(getLiteral(Potassco::id(xIt->lit)), xIt->weight));
 		}
+		// Make sure minimize constraint is not empty
+		if (lits.empty()) addMinLit(prio, WeightLiteral(lit_false(), 1));
 	}
 }
-static std::ostream& operator<<(std::ostream& out, const BodyInfo& body) {
-	if (body.type() == BodyInfo::SUM_BODY && body.bound() != -1) { out << body.bound() << " "; }
-	out << body.size() << " ";
-	out << (body.size() - body.posSize()) << " ";
-	if (body.type() == BodyInfo::COUNT_BODY) { out << body.bound() << " "; }
-	for (WeightLitVec::const_iterator it = body.lits.begin(), end = body.lits.end(); it != end; ++it) {
-		out << it->first.var() << " ";
-	}
-	if (body.type() == BodyInfo::SUM_BODY) {
-		for (WeightLitVec::const_iterator it = body.lits.begin(), end = body.lits.end(); it != end; ++it) {
-			out << it->second << " ";
-		}
-	}
-	return out;
+static void outRule(Potassco::AbstractProgram& out, const Rule& r) {
+	if (r.normal()) { out.rule(r.ht, r.head, r.cond); }
+	else            { out.rule(r.ht, r.head, r.agg.bound, r.agg.lits); }
 }
 
-void LogicProgram::write(std::ostream& os) {
-	const char* const delimiter = "0";
-	// first write all minimize rules - revert order!
-	PodVector<MinimizeRule*>::type mr;
-	for (MinimizeRule* r = minimize_; r; r = r->next_) {
-		mr.push_back(r);
+void LogicProgram::accept(Potassco::AbstractProgram& out) {
+	if (!ok()) {
+		out.rule(Head_t::Disjunctive, Potassco::toSpan<Potassco::Atom_t>(), Potassco::toSpan<Potassco::Lit_t>());
+		return;
 	}
-	for (PodVector<MinimizeRule*>::type::reverse_iterator rit = mr.rbegin(); rit != mr.rend(); ++rit) {
-		transform(**rit, activeBody_);
-		os << OPTIMIZERULE << " " << 0 << " " << activeBody_ << "\n";
-	}
-	uint32 falseAtom = 0;
-	bool  oldFreeze  = frozen();
-	setFrozen(false);
-	// write all bodies together with their heads
-	for (BodyList::iterator bIt = bodies_.begin(); bIt != bodies_.end(); ++bIt) {
-		PrgBody* b = *bIt;
-		if (b->relevant() && (b->hasVar() || b->value() == value_false) && transform(*b, activeBody_)) {
-			if (b->value() == value_false) {
-				// write integrity constraint
-				if (falseAtom == 0 && (falseAtom = findLpFalseAtom()) == 0) {
-					setCompute(falseAtom = newAtom(), false);
-				}
-				os << activeBody_.ruleType() << " " << falseAtom << " " << activeBody_ << "\n";
-			}
-			else {
-				activeHead_.clear(); uint32 nDisj = 0;
-				for (PrgBody::head_iterator hIt = b->heads_begin(); hIt != b->heads_end(); ++hIt) {
-					if (!getHead(*hIt)->hasVar() || hIt->isGamma()) { continue; }
-					if (hIt->isAtom()) {
-						if (hIt->isNormal()) { 
-							os << activeBody_.ruleType() << " " << hIt->node() << " " << activeBody_ << "\n"; 
-							if (activeBody_.type() != BodyInfo::NORMAL_BODY && getHead(*hIt)->literal() == b->literal()) {
-								activeBody_.reset();
-								Literal lit = posLit(hIt->node());
-								activeBody_.init(BodyInfo::NORMAL_BODY, 1, hashLit(lit), 1);
-								activeBody_.lits.push_back(WeightLiteral(lit, 1));
-							}
-						}
-						else if (hIt->isChoice()) { activeHead_.push_back(hIt->node()); }
-					}
-					else if (hIt->isDisj()) { ++nDisj; }
-				}
-				if (!activeHead_.empty()) {
-					os << CHOICERULE << " " << activeHead_.size() << " ";
-					std::copy(activeHead_.begin(), activeHead_.end(), std::ostream_iterator<uint32>(os, " "));
-					assert(activeBody_.type() == BodyInfo::NORMAL_BODY);
-					os << activeBody_ << "\n";
-				}
-				if (nDisj) {
-					assert(activeBody_.type() == BodyInfo::NORMAL_BODY);
-					for (PrgBody::head_iterator hIt = b->heads_begin(); hIt != b->heads_end(); ++hIt) {
-						if (hIt->isDisj()) {
-							PrgDisj* d = getDisj(hIt->node());
-							os << DISJUNCTIVERULE << " " << d->size() << " ";
-							for (PrgDisj::atom_iterator a = d->begin(), aEnd = d->end(); a != aEnd; ++a) {
-								os << a->node() << " ";
-							}
-							os << activeBody_ << "\n";
-							if (--nDisj == 0) break;
-						}
-					}
-				}
-			}
+	// visit external directives
+	if (incData_) {
+		for (VarVec::const_iterator it = incData_->frozen.begin(), end = incData_->frozen.end(); it != end; ++it) {
+			out.external(*it, static_cast<Potassco::Value_t>(getAtom(*it)->freezeValue()));
 		}
 	}
-	// write eq-atoms, symbol-table and compute statement
-	std::stringstream bp, bm, symTab;
-	Literal comp;
-	SymbolTable::const_iterator sym = ctx()->symbolTable().begin();
-	for (AtomList::size_type i = 1; i < atoms_.size(); ++i) {
-		// write the equivalent atoms
+	// visit eq- and assigned atoms
+	for (Atom_t i = startAtom(); i < atoms_.size(); ++i) {
 		if (atoms_[i]->eq()) {
-			PrgAtom* eq = getAtom(getEqAtom(Var(i)));
-			if (eq->inUpper() && eq->value() != value_false) {
-				os << "1 " << i << " 1 0 " << getEqAtom(Var(i)) << " \n";
+			Potassco::AtomSpan head = Potassco::toSpan(&i, 1);
+			Potassco::Lit_t    body = Potassco::lit(getRootId(i));
+			if (isFact(Potassco::atom(body))) {
+				out.rule(Head_t::Disjunctive, head, Potassco::toSpan<Potassco::Lit_t>());
+			}
+			else if (inProgram(Potassco::atom(body))) {
+				out.rule(Head_t::Disjunctive, head, Potassco::toSpan(&body, 1));
 			}
 		}
-		if ( (i == falseAtom || atoms_[i]->inUpper()) && atoms_[i]->value() != value_free ) {
-			std::stringstream& str = atoms_[i]->value() == value_false ? bm : bp;
-			str << i << "\n";
-		}
-		if (sym != ctx()->symbolTable().end() && Var(i) == sym->first) {
-			if (sym->second.lit != negLit(sentVar) && !sym->second.name.empty()) {
-				symTab << i << " " << sym->second.name.c_str() << "\n";
+		else if (!atomState_.isFact(i) && atoms_[i]->value() != value_free) {
+			Potassco::AtomSpan head = Potassco::toSpan<Potassco::Atom_t>();
+			Potassco::Lit_t    body = Potassco::neg(i);
+			if (atoms_[i]->value() != value_false) {
+				out.rule(Head_t::Disjunctive, head, Potassco::toSpan(&body, 1));
 			}
-			++sym;
+			else if (inProgram(i)) {
+				body = Potassco::neg(body);
+				out.rule(Head_t::Disjunctive, head, Potassco::toSpan(&body, 1));
+			}
 		}
 	}
-	os << delimiter << "\n";
-	os << symTab.str();
-	os << delimiter << "\n";
-	os << "B+\n" << bp.str() << "0\n"
-		 << "B-\n" << bm.str() << "0\n1\n";
-	setFrozen(oldFreeze);
+	// visit program rules
+	const bool simp = frozen();
+	using Potassco::Lit_t;
+	VarVec choice;
+	for (BodyList::iterator bIt = bodies_.begin(); bIt != bodies_.end(); ++bIt) {
+		rule_.clear();
+		choice.clear();
+		Atom_t head;
+		Lit_t  auxB;
+		PrgBody* b = *bIt;
+		if (b->relevant() && (b->inRule() || b->value() == value_false) && b->toData(*this, rule_)) {
+			if (b->value() == value_false) {
+				outRule(out, rule_.rule());
+				continue;
+			}
+			uint32 numDis = 0;
+			Rule r = rule_.rule();
+			for (PrgBody::head_iterator hIt = b->heads_begin(); hIt != b->heads_end(); ++hIt) {
+				if (hIt->isGamma() || (simp && !getHead(*hIt)->hasVar())) { continue; }
+				if (hIt->isAtom() && hIt->node() && inProgram(hIt->node())) {
+					if      (hIt->isNormal()) { r.head = Potassco::toSpan(&(head = hIt->node()), 1); outRule(out, r); }
+					else if (hIt->isChoice()) { choice.push_back(hIt->node()); }
+					if (simp && getRootAtom(hIt->node())->var() == b->var() && !r.normal()) {
+						// replace complex body with head atom
+						auxB = Potassco::lit(hIt->node());
+						if (getRootAtom(hIt->node())->literal() != b->literal()) { auxB *= -1; }
+						r.bt   = Body_t::Normal;
+						r.cond = Potassco::toSpan(&auxB, 1);
+					}
+				}
+				else if (hIt->isDisj()) { ++numDis; }
+			}
+			if (!choice.empty()) {
+				r.head = Potassco::toSpan(choice);
+				r.ht   = Head_t::Choice;
+				outRule(out, r);
+			}
+			for (PrgBody::head_iterator hIt = b->heads_begin(); hIt != b->heads_end() && numDis; ++hIt) {
+				if (hIt->isDisj()) {
+					PrgDisj* d = getDisj(hIt->node());
+					r.head = Potassco::toSpan(d->begin(), d->size());
+					r.ht   = Head_t::Disjunctive;
+					outRule(out, r);
+					--numDis;
+				}
+			}
+		}
+	}
+	LpWLitVec wlits;
+	for (MinList::iterator it = minimize_.begin(), end = minimize_.end(); it != end; ++it) {
+		Potassco::WeightLitSpan ws = Potassco::toSpan((*it)->lits);
+		for (const Potassco::WeightLit_t* x = Potassco::begin(ws), *xEnd = Potassco::end(ws); x != xEnd; ++x) {
+			if (x->weight == 0 || !inProgram(Potassco::atom(*x))) { // simplify literals
+				wlits.assign(Potassco::begin(ws), x);
+				for (; x != xEnd; ++x) {
+					if (x->weight != 0 && (x->weight < 0 || x->lit < 0 || inProgram(Potassco::atom(*x)))) {
+						wlits.push_back(*x);
+					}
+				}
+				ws = Potassco::toSpan(wlits);
+				break;
+			}
+		}
+		out.minimize((*it)->prio, ws);
+	}
+	Potassco::LitVec lits;
+	// visit output directives
+	for (ShowVec::const_iterator it = show_.begin(); it != show_.end(); ++it) {
+		if (extractCondition(it->first, lits)) {
+			out.output(Potassco::toSpan(it->second.c_str(), std::strlen(it->second.c_str())), Potassco::toSpan(lits));
+		}
+	}
+	// visit projection directives
+	if (!auxData_->project.empty()) {
+		out.project(auxData_->project.back() ? Potassco::toSpan(auxData_->project) : Potassco::toSpan<Atom_t>());
+	}
+	// visit assumptions
+	if (!auxData_->assume.empty()) {
+		out.assume(Potassco::toSpan(auxData_->assume));
+	}
+	// visit heuristics
+	if (!auxData_->dom.empty()) {
+		for (DomRules::const_iterator it = auxData_->dom.begin(), end = auxData_->dom.end(); it != end; ++it) {
+			if (extractCondition(it->cond, lits)) {
+				out.heuristic(it->atom, static_cast<DomModType>(it->type), it->bias, it->prio, Potassco::toSpan(lits));
+			}
+		}
+	}
+	// visit acyc edges
+	if (!auxData_->acyc.empty()) {
+		for (AcycRules::const_iterator it = auxData_->acyc.begin(), end = auxData_->acyc.end(); it != end; ++it) {
+			if (extractCondition(it->cond, lits)) {
+				out.acycEdge(it->node[0], it->node[1], Potassco::toSpan(lits));
+			}
+		}
+	}
+	if (theory_ && theory_->numAtoms()) {
+		struct This : public Potassco::TheoryData::Visitor {
+			This(const Asp::LogicProgram& p, Potassco::AbstractProgram& o, Potassco::LitVec& c) : self(&p), out(&o), cond(&c) {}
+			virtual void visit(const Potassco::TheoryData& data, Potassco::Id_t termId, const Potassco::TheoryTerm& t) {
+				if (!addSeen(termId, 1)) { return; }
+				data.accept(t, *this);
+				Potassco::print(*out, termId, t);
+			}
+			virtual void visit(const Potassco::TheoryData& data, Potassco::Id_t elemId, const Potassco::TheoryElement& e) {
+				if (!addSeen(elemId, 2)) { return; }
+				data.accept(e, *this);
+				cond->clear();
+				if (e.condition()) { self->extractCondition(e.condition(), *cond); }
+				out->theoryElement(elemId, e.terms(), Potassco::toSpan(*cond));
+			}
+			virtual void visit(const Potassco::TheoryData& data, const Potassco::TheoryAtom& a) {
+				data.accept(a, *this);
+				Potassco::print(*out, a);
+				const Atom_t id = a.atom();
+				if (self->validAtom(id) && self->atomState_.isSet(id, AtomState::false_flag) && !self->inProgram(id)) {
+					Potassco::Lit_t x = Potassco::lit(id);
+					out->rule(Head_t::Disjunctive, Potassco::toSpan<Potassco::Atom_t>(), Potassco::toSpan(&x, 1));
+				}
+			}
+			bool addSeen(Potassco::Id_t id, unsigned char n) {
+				if (id >= seen.size()) { seen.resize(id + 1, 0); }
+				unsigned char old = seen[id];
+				return (seen[id] |= n) != old;
+			}
+			typedef PodVector<unsigned char>::type IdSet;
+			const Asp::LogicProgram*   self;
+			Potassco::AbstractProgram* out;
+			Potassco::LitVec*          cond;
+			IdSet                      seen;
+		} self(*this, out, lits);
+		theory_->accept(self);
+	}
 }
-
 /////////////////////////////////////////////////////////////////////////////////////////
 // Program mutating functions
 /////////////////////////////////////////////////////////////////////////////////////////
 #define check_not_frozen() CLASP_ASSERT_CONTRACT_MSG(!frozen(), "Can't update frozen program!")
-#define check_modular(x, atomId) (void)( (!!(x)) || (throw RedefinitionError((atomId), this->getAtomName((atomId))), 0))
-RedefinitionError::RedefinitionError(unsigned atomId, const char* name) : std::logic_error(clasp_format_error("Program not modular: Redefinition of atom <%u,'%s'>", atomId, name)) {
+#define check_modular(x, atomId) (void)( (!!(x)) || (throw RedefinitionError((atomId), this->findName((atomId))), 0))
+RedefinitionError::RedefinitionError(unsigned atomId, const char* name)
+	: std::logic_error(ClaspStringBuffer().appendFormat("redefinition of atom <'%s',%u>", name && *name ? name : "_", atomId).c_str()) {
 }
 
-Var LogicProgram::newAtom() {
+Atom_t LogicProgram::newAtom() {
 	check_not_frozen();
-	Var id = static_cast<Var>(atoms_.size());
+	Atom_t id = static_cast<Atom_t>(atoms_.size());
 	atoms_.push_back( new PrgAtom(id) );
 	return id;
 }
-
-LogicProgram& LogicProgram::setAtomName(Var atomId, const char* name) {
+Id_t LogicProgram::newCondition(const Potassco::LitSpan& cond) {
 	check_not_frozen();
-	check_modular(isNew(atomId), atomId);
-	resize(atomId);
-	ctx()->symbolTable().addUnique(atomId, name);
+	SRule meta;
+	if (simplifyNormal(Head_t::Disjunctive, Potassco::toSpan<Potassco::Atom_t>(), cond, rule_, meta)) {
+		Rule r = rule_.rule();
+		if (r.cond.size == 0) { return 0; }
+		if (r.cond.size == 1) { return Potassco::id(r.cond[0]); }
+		PrgBody* b = getBodyFor(r, meta);
+		b->markFrozen();
+		return static_cast<Id_t>(Clasp::Asp::bodyId | b->id());
+	}
+	return static_cast<Id_t>(Clasp::Asp::falseId);
+}
+LogicProgram& LogicProgram::addOutput(const ConstString& str, const Potassco::LitSpan& cond) {
+	if (!ctx()->output.filter(str)) {
+		CLASP_FAIL_IF(cond.size == 1 && Potassco::atom(cond[0]) >= bodyId, "Atom out of bounds");
+		show_.push_back(ShowPair(cond.size == 1 ? Potassco::id(cond[0]) : newCondition(cond), str));
+	}
+	return *this;
+}
+LogicProgram& LogicProgram::addOutput(const ConstString& str, Id_t id) {
+	if (!ctx()->output.filter(str) && id != falseId) {
+		show_.push_back(ShowPair(id, str));
+	}
 	return *this;
 }
 
-LogicProgram& LogicProgram::setCompute(Var atomId, bool pos) {
-	resize(atomId);
-	ValueRep v = pos ? value_weak_true : value_false;
-	PrgAtom* a = atoms_[atomId];
-	assert(!a->hasVar() || a->frozen());
-	assignValue(a, v);
+LogicProgram& LogicProgram::addProject(const Potassco::AtomSpan& atoms) {
+	check_not_frozen();
+	VarVec& pro = auxData_->project;
+	if (!Potassco::empty(atoms)) {
+		if (!pro.empty() && pro.back() == 0) { pro.pop_back(); }
+		pro.insert(pro.end(), Potassco::begin(atoms), Potassco::end(atoms));
+	}
+	else if (pro.empty()) {
+		pro.push_back(0);
+	}
 	return *this;
 }
 
-PrgAtom* LogicProgram::setExternal(Var atomId, ValueRep v) {
+TheoryData& LogicProgram::theoryData() {
+	if (!theory_) { theory_ = new TheoryData(); }
+	return *theory_;
+}
+
+PrgAtom* LogicProgram::setExternal(Atom_t atomId, ValueRep v) {
 	PrgAtom* a = resize(atomId);
-	if (a->frozen() || (isNew(atomId) && !a->supports())) {
+	if (a->frozen() || (isNew(a->id()) && !a->supports())) {
 		if (!incData_)    { incData_ = new Incremental(); }
 		if (!a->frozen()) { incData_->update.push_back(a->id()); }
 		a->markFrozen(v);
@@ -439,14 +596,14 @@ PrgAtom* LogicProgram::setExternal(Var atomId, ValueRep v) {
 	return 0; // atom is defined or from a previous step - ignore!
 }
 
-LogicProgram& LogicProgram::freeze(Var atomId, ValueRep value) {
+LogicProgram& LogicProgram::freeze(Atom_t atomId, ValueRep value) {
 	check_not_frozen();
 	CLASP_ASSERT_CONTRACT(value < value_weak_true);
 	setExternal(atomId, value);
 	return *this;
 }
 
-LogicProgram& LogicProgram::unfreeze(Var atomId) {
+LogicProgram& LogicProgram::unfreeze(Atom_t atomId) {
 	check_not_frozen();
 	PrgAtom* a = setExternal(atomId, value_free);
 	if (a && a->supports() == 0) {
@@ -455,153 +612,334 @@ LogicProgram& LogicProgram::unfreeze(Var atomId) {
 	}
 	return *this;
 }
-
-bool LogicProgram::isExternal(Var aId) const {
-	if (!aId || aId > numAtoms()) { return false; }
-	PrgAtom* a = getAtom(getEqAtom(aId));
-	return a->frozen() && (a->supports() == 0 || frozen());
+void LogicProgram::setMaxInputAtom(uint32 n) {
+	check_not_frozen();
+	resize(n++);
+	CLASP_ASSERT_CONTRACT_MSG(n >= startAtom(), "invalid input range");
+	input_.hi = n;
+}
+Atom_t LogicProgram::startAuxAtom() const {
+	return validAtom(input_.hi) ? input_.hi : (uint32)atoms_.size();
+}
+bool LogicProgram::supportsSmodels() const {
+	if (incData_ || theory_)        { return false; }
+	if (!auxData_->dom.empty())     { return false; }
+	if (!auxData_->acyc.empty())    { return false; }
+	if (!auxData_->assume.empty())  { return false; }
+	if (!auxData_->project.empty()) { return false; }
+	for (ShowVec::const_iterator it = show_.begin(), end = show_.end(); it != end; ++it) {
+		Potassco::Lit_t lit = Potassco::lit(it->first);
+		if (lit <= 0 || static_cast<uint32>(lit) >= bodyId) { return false; }
+	}
+	return true;
 }
 
-LogicProgram& LogicProgram::addRule(const Rule& r) {
+bool LogicProgram::isExternal(Atom_t aId) const {
+	if (!aId || !validAtom(aId)) { return false; }
+	PrgAtom* a = getRootAtom(aId);
+	return a->frozen() && (a->supports() == 0 || frozen());
+}
+bool LogicProgram::isFact(Atom_t aId) const {
+	return validAtom(aId) && (atomState_.isFact(aId) || atomState_.isFact(getRootId(aId)));
+}
+bool LogicProgram::isDefined(Atom_t aId) const {
+	if (!validAtom(aId) || getAtom(aId)->removed()) {
+		return false;
+	}
+	PrgAtom* a = getAtom(aId);
+	return isFact(aId) || (a->relevant() && a->supports() && !isExternal(aId));
+}
+bool LogicProgram::inProgram(Atom_t id) const {
+	if (PrgAtom* a = (validAtom(id) ? getAtom(id) : 0)) {
+		return a->relevant() && (a->supports() || a->frozen() || !isNew(id));
+	}
+	return false;
+}
+LogicProgram& LogicProgram::addAssumption(const Potassco::LitSpan& lits) {
+	auxData_->assume.insert(auxData_->assume.end(), Potassco::begin(lits), Potassco::end(lits));
+	return *this;
+}
+
+LogicProgram& LogicProgram::addAcycEdge(uint32 n1, uint32 n2, Id_t condId) {
+	if (condId != falseId) {
+		AcycArc arc = { condId, {n1, n2} };
+		auxData_->acyc.push_back(arc);
+	}
+	upStat(RK(Acyc), 1);
+	return *this;
+}
+
+LogicProgram& LogicProgram::addDomHeuristic(Atom_t atom, DomModType t, int bias, unsigned prio) {
+	return addDomHeuristic(atom, t, bias, prio, Potassco::toSpan<Potassco::Lit_t>());
+}
+LogicProgram& LogicProgram::addDomHeuristic(Atom_t atom, DomModType type, int bias, unsigned prio, Id_t cond) {
+	static_assert(sizeof(DomRule) == sizeof(uint32[3]), "Invalid DomRule size");
+	if (cond != falseId) {
+		auxData_->dom.push_back(DomRule());
+		DomRule& x = auxData_->dom.back();
+		x.atom = atom;
+		x.type = type;
+		x.cond = cond;
+		x.bias = (int16)Range<int>(INT16_MIN, INT16_MAX).clamp(bias);
+		x.prio = (uint16)Range<unsigned>(unsigned(0), unsigned(~uint16(0)) ).clamp(prio);
+	}
+	upStat(RK(Heuristic), 1);
+	return *this;
+}
+LogicProgram& LogicProgram::addRule(const Rule& rule) {
 	check_not_frozen();
-	// simplify rule
-	RuleType t = simplifyRule(r, activeHead_, activeBody_);
-	if (t != ENDRULE) { // rule is relevant
-		upRules(t, 1);
-		if (handleNatively(t, activeBody_)) { // and can be handled natively
-			addRuleImpl(t, activeHead_, activeBody_);
+	SRule meta;
+	if (simplifyRule(rule, rule_, meta)) {
+		Rule sRule = rule_.rule();
+		upStat(sRule.ht);
+		if (handleNatively(sRule)) { // and can be handled natively
+			addRule(sRule, meta);
 		}
 		else {
-			bool  aux  = transformNoAux(t, activeBody_) == false;
-			Rule* temp = new Rule();
-			temp->setType(t);
-			temp->setBound(activeBody_.bound());
-			temp->heads.swap(activeHead_);
-			temp->body.swap(activeBody_.lits);
-			if (aux) {
-				// Since rule transformation needs aux atoms, we must
-				// defer the transformation until all rules were added
-				// because only then we can safely assign new unique consecutive atom ids.
-				extended_.push_back(temp);
+			upStat(sRule.bt);
+			if (Potassco::size(sRule.head) <= 1 && transformNoAux(sRule)) {
+				// rule transformation does not require aux atoms - do it now
+				int oId  = statsId_;
+				statsId_ = 1;
+				RuleTransform tm(*this);
+				upStat(sRule.bt, -1);
+				upStat(rule.ht, -1);
+				tm.transform(sRule, RuleTransform::strategy_select_no_aux);
+				statsId_ = oId;
 			}
 			else {
-				RuleTransform rt;
-				incTr(t, rt.transformNoAux(*this, *temp));
-				delete temp;
+				// make sure we have all head atoms
+				for (Potassco::AtomSpan::iterator it = Potassco::begin(sRule.head), end = Potassco::end(sRule.head); it != end; ++it) {
+					resize(*it);
+				}
+				extended_.push_back(new RuleBuilder(rule_));
 			}
 		}
 	}
-	activeBody_.reset();
+	rule_.clear();
+	return *this;
+}
+
+LogicProgram& LogicProgram::addRule(Head_t ht, const Potassco::AtomSpan& head, const Potassco::LitSpan& body) {
+	return addRule(Rule::normal(ht, head, body));
+}
+LogicProgram& LogicProgram::addRule(Head_t ht, const Potassco::AtomSpan& head, Potassco::Weight_t bound, const Potassco::WeightLitSpan& lits) {
+	return addRule(Rule::sum(ht, head, bound, lits));
+}
+LogicProgram& LogicProgram::addRule(Potassco::RuleBuilder& rb) {
+	LogicProgramAdapter prg(*this);
+	rb.end(&prg);
+	return *this;
+}
+LogicProgram& LogicProgram::addMinimize(weight_t prio, const Potassco::WeightLitSpan& lits) {
+	SingleOwnerPtr<Min> n(new Min());
+	n->prio = prio;
+	MinList::iterator it = std::lower_bound(minimize_.begin(), minimize_.end(), n.get(), CmpMin());
+	if (it == minimize_.end() || (*it)->prio != prio) {
+		n->lits.assign(Potassco::begin(lits), Potassco::end(lits));
+		minimize_.insert(it, n.get());
+		n.release();
+		upStat(RuleStats::Minimize);
+	}
+	else {
+		(*it)->lits.insert((*it)->lits.end(), Potassco::begin(lits), Potassco::end(lits));
+	}
 	return *this;
 }
 #undef check_not_frozen
 /////////////////////////////////////////////////////////////////////////////////////////
 // Query functions
 /////////////////////////////////////////////////////////////////////////////////////////
-Literal LogicProgram::getLiteral(Var atomId) const {
-	CLASP_ASSERT_CONTRACT_MSG(atomId < atoms_.size(), "Atom out of bounds!");
-	return getAtom(getEqAtom(atomId))->literal();
+bool LogicProgram::isFact(PrgAtom* a) const {
+	uint32 eqId = getRootId(a->id());
+	if (atomState_.isFact(eqId)) {
+		return true;
+	}
+	if (a->value() == value_true) {
+		for (PrgAtom::sup_iterator it = a->supps_begin(), end = a->supps_end(); it != end; ++it) {
+			if (it->isBody() && it->isNormal() && getBody(it->node())->bound() == 0) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
+Literal LogicProgram::getLiteral(Id_t id) const {
+	Literal out = lit_false();
+	Potassco::Id_t nId = nodeId(id);
+	if (isAtom(id) && validAtom(nId)) {
+		out = getRootAtom(nId)->literal();
+	}
+	else if (isBody(id)) {
+		CLASP_FAIL_IF(!validBody(nId), "Invalid condition");
+		out = getBody(getEqBody(nId))->literal();
+	}
+	return out ^ signId(id);
+}
+Literal LogicProgram::getDomLiteral(Atom_t atomId) const {
+	IndexMap::const_iterator it = domEqIndex_.find(atomId);
+	return it == domEqIndex_.end() ? getLiteral(atomId) : posLit(it->second);
+}
+
 void LogicProgram::doGetAssumptions(LitVec& out) const {
 	if (incData_) {
 		for (VarVec::const_iterator it = incData_->frozen.begin(), end = incData_->frozen.end(); it != end; ++it) {
-			Literal lit = getAtom(getEqAtom(*it))->assumption();
-			if (lit != posLit(0)) { out.push_back( lit ); }
+			Literal lit = getRootAtom(*it)->assumption();
+			if (lit != lit_true()) { out.push_back( lit ); }
 		}
+	}
+	for (Potassco::LitVec::const_iterator it = auxData_->assume.begin(), end = auxData_->assume.end(); it != end; ++it) {
+		out.push_back(getLiteral(Potassco::id(*it)));
 	}
 }
 /////////////////////////////////////////////////////////////////////////////////////////
 // Program definition - private
 /////////////////////////////////////////////////////////////////////////////////////////
-void LogicProgram::addRuleImpl(RuleType r, const VarVec& heads, BodyInfo& body) {
-	if (r != OPTIMIZERULE) {
-		assert(!heads.empty() && (r != DISJUNCTIVERULE || heads.size() > 1));
-		PrgBody* b = getBodyFor(body);
-		// only a non-false body can define atoms
-		if (b->value() != value_false) {
-			EdgeType t      = r != CHOICERULE ? PrgEdge::NORMAL_EDGE : PrgEdge::CHOICE_EDGE;
-			uint32 headHash = 0;
-			bool ignoreScc  = opts_.noSCC || b->size() == 0;
-			for (VarVec::const_iterator it = heads.begin(), end = heads.end(); it != end; ++it) {
-				PrgAtom* a = resize(*it);
-				check_modular(isNew(*it) || a->frozen() || a->value() == value_false, *it);
-				if (r != DISJUNCTIVERULE) {
-					// Note: b->heads may now contain duplicates. They are removed in PrgBody::simplifyHeads.
-					b->addHead(a, t);
-					if (ignoreScc) { a->setIgnoreScc(ignoreScc); }
-				}
-				else {
-					headHash += hashId(*it);
-					ruleState_.addToHead(*it);
-				}
-			}
-			if (r == DISJUNCTIVERULE) {
-				assert(headHash != 0);
-				PrgDisj* d = getDisjFor(heads, headHash);
-				b->addHead(d, t);
-			}
-		}	
+void LogicProgram::addRule(const Rule& r, const SRule& meta) {
+	if (Potassco::size(r.head) <= 1 && r.ht == Head_t::Disjunctive) {
+		if      (Potassco::empty(r.head))        { addIntegrity(r, meta); return; }
+		else if (r.normal() && r.cond.size == 0) { addFact(r.head); return; }
 	}
-	else {
-		CLASP_ASSERT_CONTRACT(heads.empty());
-		LogicProgram::MinimizeRule* mr = new LogicProgram::MinimizeRule;
-		mr->lits_ = body.lits;
-		mr->next_ = minimize_;
-		minimize_ = mr;
+	PrgBody* b = getBodyFor(r, meta);
+	// only a non-false body can define atoms
+	if (b->value() != value_false) {
+		bool const disjunctive = Potassco::size(r.head) > 1 && r.ht == Head_t::Disjunctive;
+		const EdgeType t = r.ht == Head_t::Disjunctive ? PrgEdge::Normal : PrgEdge::Choice;
+		uint32 headHash = 0;
+		bool ignoreScc  = opts_.noSCC || b->size() == 0;
+		for (Potassco::AtomSpan::iterator it = Potassco::begin(r.head), end = Potassco::end(r.head); it != end; ++it) {
+			PrgAtom* a = resize(*it);
+			check_modular(isNew(*it) || a->frozen() || a->value() == value_false, *it);
+			if (!disjunctive) {
+				// Note: b->heads may now contain duplicates. They are removed in PrgBody::simplifyHeads.
+				b->addHead(a, t);
+				if (ignoreScc) { a->setIgnoreScc(ignoreScc); }
+			}
+			else {
+				headHash += hashLit(posLit(*it));
+				atomState_.addToHead(*it);
+			}
+		}
+		if (disjunctive) {
+			PrgDisj* d = getDisjFor(r.head, headHash);
+			b->addHead(d, t);
+		}
 	}
 }
-
-bool LogicProgram::assignValue(PrgAtom* a, ValueRep v) {
-	if (a->eq())            { a = getAtom(getEqAtom(a->id())); }
+void LogicProgram::addFact(const Potassco::AtomSpan& head) {
+	PrgBody* tb = 0;
+	for (Potassco::AtomSpan::iterator it = Potassco::begin(head), end = Potassco::end(head); it != end; ++it) {
+		PrgAtom* a = resize(*it);
+		check_modular(isNew(*it) || a->frozen() || a->value() == value_false, *it);
+		if (*it != a->id() || atomState_.isFact(*it)) { continue; }
+		a->setIgnoreScc(true);
+		atomState_.set(*it, AtomState::fact_flag);
+		if (!a->hasDep(PrgAtom::dep_all) && !a->frozen()) {
+			if (!a->assignValue(value_true) || !a->propagateValue(*this, false)) {
+				setConflict();
+			}
+			for (PrgAtom::sup_iterator bIt = a->supps_begin(), bEnd = a->supps_end(); bIt != bEnd; ++bIt) {
+				if      (bIt->isBody()) { getBody(bIt->node())->markHeadsDirty(); }
+				else if (bIt->isDisj()) { getDisj(bIt->node())->markDirty(); }
+			}
+			atoms_[*it] = &trueAtom_g;
+			delete a;
+		}
+		else {
+			if (!tb) tb = getTrueBody();
+			tb->addHead(a, PrgEdge::Normal);
+			assignValue(a, value_true, PrgEdge::newEdge(*tb, PrgEdge::Normal));
+		}
+	}
+}
+void LogicProgram::addIntegrity(const Rule& r, const SRule& meta) {
+	if (r.sum() || r.cond.size != 1 || meta.bid != varMax) {
+		PrgBody* B = getBodyFor(r, meta);
+		if (!B->assignValue(value_false) || !B->propagateValue(*this, true)) {
+			setConflict();
+		}
+	}
+	else {
+		PrgAtom* a = resize(Potassco::atom(r.cond[0]));
+		ValueRep v = r.cond[0] > 0 ? value_false : value_weak_true;
+		assignValue(a, v, PrgEdge::noEdge());
+	}
+}
+bool LogicProgram::assignValue(PrgAtom* a, ValueRep v, PrgEdge reason) {
+	if (a->eq()) { a = getRootAtom(a->id()); }
 	ValueRep old = a->value();
 	if (old == value_weak_true && v != value_weak_true) old = value_free;
 	if (!a->assignValue(v)) { setConflict(); return false; }
-	if (old == value_free)  { propQ_.push_back(a->id()); }
+	if (old == value_free)  { propQ_.push_back(a->id());  }
+	if (v == value_false) {
+		atomState_.set(a->id(), AtomState::false_flag);
+	}
+	else if (v == value_true && reason.isBody() && reason.isNormal() && getBody(reason.node())->bound() == 0) {
+		atomState_.set(a->id(), AtomState::fact_flag);
+	}
 	return true;
 }
-bool LogicProgram::assignValue(PrgHead* h, ValueRep v) {
-	return !h->isAtom() || assignValue(static_cast<PrgAtom*>(h), v);
+bool LogicProgram::assignValue(PrgHead* h, ValueRep v, PrgEdge reason) {
+	return !h->isAtom() || assignValue(static_cast<PrgAtom*>(h), v, reason);
 }
 
-bool LogicProgram::handleNatively(RuleType r, const BodyInfo& body) const {
+bool LogicProgram::handleNatively(const Rule& r) const {
 	ExtendedRuleMode m = opts_.erMode;
-	if (r == BASICRULE || r == OPTIMIZERULE || m == mode_native) {
+	if (m == mode_native || (r.normal() && r.ht == Head_t::Disjunctive)) {
 		return true;
 	}
 	else if (m == mode_transform_integ || m == mode_transform_scc || m == mode_transform_nhcf) {
 		return true;
 	}
 	else if (m == mode_transform) {
-		return r == DISJUNCTIVERULE;
+		return false;
 	}
 	else if (m == mode_transform_dynamic) {
-		return (r != CONSTRAINTRULE && r != WEIGHTRULE)
-			|| transformNoAux(r, body) == false;
+		return r.normal() || transformNoAux(r) == false;
 	}
 	else if (m == mode_transform_choice) {
-		return r != CHOICERULE;
+		return r.ht != Head_t::Choice;
 	}
 	else if (m == mode_transform_card)   {
-		return r != CONSTRAINTRULE;
+		return r.bt != Body_t::Count;
 	}
 	else if (m == mode_transform_weight) {
-		return r != CONSTRAINTRULE && r != WEIGHTRULE;
+		return r.normal();
 	}
 	assert(false && "unhandled extended rule mode");
 	return true;
 }
 
-bool LogicProgram::transformNoAux(RuleType r, const BodyInfo& body) const {
-	return r != CHOICERULE && (body.bound() == 1 || (body.size() <= 6 && choose(body.size(), body.bound()) <= 15));
+bool LogicProgram::transformNoAux(const Rule& r) const {
+	return r.ht == Head_t::Disjunctive && r.sum() && (r.agg.bound == 1 || (r.agg.lits.size <= 6 && choose(r.agg.lits.size, r.agg.bound) <= 15));
 }
 
 void LogicProgram::transformExtended() {
-	// remember starting position of aux atoms so
-	// that we can remove them on next incremental step
-	uint32 a  = numAtoms();
-	RuleTransform tm;
+	uint32 a = numAtoms();
+	RuleTransform tm(*this);
 	for (RuleList::size_type i = 0; i != extended_.size(); ++i) {
-		incTr(extended_[i]->type(), tm.transform(*this, *extended_[i]));
+		Rule r = extended_[i]->rule();
+		upStat(r.ht, -1);
+		upStat(r.bt, -1);
+		if (r.normal() || (r.ht == Head_t::Disjunctive && Potassco::size(r.head) < 2)) {
+			tm.transform(r);
+		}
+		else {
+			using Potassco::Lit_t;
+			Atom_t aux = newAtom();
+			Lit_t auxB = Potassco::lit(aux);
+			Rule rAux1 = r; // aux :- body
+			rAux1.ht   = Head_t::Disjunctive;
+			rAux1.head = Potassco::toSpan(&aux, 1);
+			Rule rAux2 = Rule::normal(r.ht, r.head, Potassco::toSpan(&auxB, 1));  // head :- auxB
+			if (handleNatively(rAux1)) { addRule(rAux1); }
+			else {
+				RuleTransform::Strategy st = transformNoAux(rAux1) ? RuleTransform::strategy_select_no_aux : RuleTransform::strategy_default;
+				tm.transform(rAux1, st);
+			}
+			if (handleNatively(rAux2)) { addRule(rAux2); }
+			else                       { tm.transform(rAux2); }
+		}
 		delete extended_[i];
 	}
 	extended_.clear();
@@ -609,42 +947,40 @@ void LogicProgram::transformExtended() {
 }
 
 void LogicProgram::transformIntegrity(uint32 nAtoms, uint32 maxAux) {
-	if (stats.rules(CONSTRAINTRULE).second == 0) { return; }
+	if (stats.bodies[1][Body_t::Count] == 0) { return; }
 	// find all constraint rules that are integrity constraints
 	BodyList integrity;
 	for (uint32 i = 0, end = static_cast<uint32>(bodies_.size()); i != end; ++i) {
 		PrgBody* b = bodies_[i];
-		if (b->relevant() && b->type() == BodyInfo::COUNT_BODY && b->value() == value_false) {
+		if (b->relevant() && b->type() == Body_t::Count && b->value() == value_false) {
 			integrity.push_back(b);
 		}
 	}
 	if (!integrity.empty() && (integrity.size() == 1 || (nAtoms/double(bodies_.size()) > 0.5 && integrity.size() / double(bodies_.size()) < 0.01))) {
 		uint32 aux = static_cast<uint32>(atoms_.size());
+		RuleTransform tr(*this);
+		RuleBuilder temp;
 		// transform integrity constraints
 		for (BodyList::size_type i = 0; i != integrity.size(); ++i) {
 			PrgBody* b = integrity[i];
 			uint32 est = b->bound()*( b->sumW()-b->bound() );
 			if (est > maxAux) {
 				// reached limit on aux atoms - stop transformation
-				break; 
+				break;
 			}
-			maxAux -= est;
-			// transform rule
-			Rule* r;
-			extended_.push_back(r = new Rule());
-			r->setType(CONSTRAINTRULE);
-			r->setBound(b->bound());
-			r->addHead(getFalseId());
-			for (uint32 g = 0; g != b->size(); ++g) {
-				r->addToBody(b->goal(g).var(), !b->goal(g).sign());
+			if (b->toData(*this, temp) && temp.bodyType() != Body_t::Normal) {
+				maxAux -= est;
+				// transform rule
+				setFrozen(false);
+				upStat(Head_t::Disjunctive, -1);
+				upStat(Body_t::Count, -1);
+				tr.transform(Rule::sum(Head_t::Disjunctive, Potassco::toSpan<Potassco::Atom_t>(), temp.bound(), Potassco::toSpan(temp.sum(), temp.bodySize())));
+				setFrozen(true);
+				// propagate integrity condition to new rules
+				propagate(true);
+				b->markRemoved();
 			}
-			setFrozen(false);
-			transformExtended();
-			setFrozen(true);
-			// propagate integrity condition to new rules
-			propQ_.push_back(getFalseId());
-			propagate(true);
-			b->markRemoved();
+			temp.clear();
 		}
 		// create vars for new atoms/bodies
 		for (uint32 i = aux; i != atoms_.size(); ++i) {
@@ -656,28 +992,17 @@ void LogicProgram::transformIntegrity(uint32 nAtoms, uint32 maxAux) {
 			}
 			a->assignVar(*this, a->supports() ? *a->supps_begin() : PrgEdge::noEdge());	
 		}
-	}
-}
-
-// replace equivalent atoms in minimize rules
-void LogicProgram::simplifyMinimize() {
-	assert(hasMinimize());
-	for (LogicProgram::MinimizeRule* r = minimize_; r; r = r->next_) {
-		for (WeightLitVec::iterator it = r->lits_.begin(); it != r->lits_.end(); ++it) {
-			it->first = Literal(getEqAtom(it->first.var()), it->first.sign());
-		}
+		incTrAux(static_cast<uint32>(atoms_.size()) - aux);
 	}
 }
 
 void LogicProgram::updateFrozenAtoms() {
 	if (!incData_) { return; }
 	assert(incData_->frozen.empty());
-	activeHead_.clear();
- 	activeBody_.reset();
 	PrgBody* support   = 0;
 	VarVec::iterator j = incData_->update.begin();
 	for (VarVec::iterator it = j, end = incData_->update.end(); it != end; ++it) {
-		Var id     = getEqAtom(*it);
+		Id_t id = getRootId(*it);
  		PrgAtom* a = getAtom(id);
 		assert(a->frozen());
 		a->resetId(id, false);
@@ -689,14 +1014,15 @@ void LogicProgram::updateFrozenAtoms() {
 			}
 			if (!isNew(id)) {
 				// keep in list so that we can later perform completion
-				*j++ = id; 
+				*j++ = id;
 			}
 		}
 		else {
 			assert(a->relevant() && a->supports() == 0);
-			if (!support) { support = getBodyFor(activeBody_); }
+			CLASP_ASSERT_CONTRACT_MSG(id < startAuxAtom(), "frozen atom shall be an input atom");
+			if (!support) { support = getTrueBody(); }
  			a->setIgnoreScc(true);
- 			support->addHead(a, PrgEdge::CHOICE_EDGE);
+			support->addHead(a, PrgEdge::GammaChoice);
 			incData_->frozen.push_back(id); // still frozen
 		}
 	}
@@ -705,26 +1031,50 @@ void LogicProgram::updateFrozenAtoms() {
 
 void LogicProgram::prepareProgram(bool checkSccs) {
 	assert(!frozen());
-	startAux_ = (uint32)atoms_.size();
+	uint32 nAtoms = (input_.hi = std::min(input_.hi, endAtom()));
+	stats.auxAtoms += endAtom() - nAtoms;
+	for (uint32 i = 0; i != RuleStats::numKeys(); ++i) {
+		stats.rules[1][i] += stats.rules[0][i];
+	}
+	for (uint32 i = 0; i != BodyStats::numKeys(); ++i) {
+		stats.bodies[1][i] += stats.bodies[0][i];
+	}
+	statsId_ = 1;
 	transformExtended();
-	stats.bodies= numBodies();
-	if (opts_.normalize) { /* normalize(); */ assert(false);  }
 	updateFrozenAtoms();
+	freezeTheory();
+	PrgAtom* suppAtom = 0;
+	if (opts_.suppMod) {
+		VarVec h;
+		suppAtom  = getAtom(newAtom());
+		h.assign(1, suppAtom->id());
+		addRule(Head_t::Choice, Potassco::toSpan(h), Potassco::toSpan<Potassco::Lit_t>());
+		Potassco::Lit_t body = Potassco::lit(suppAtom->id());
+		h.clear();
+		for (Atom_t v = startAtom(), end = suppAtom->id(); v != end; ++v) {
+			if (atoms_[v]->supports() != 0) { h.push_back(v); }
+		}
+		addRule(Head_t::Choice, Potassco::toSpan(h), Potassco::toSpan(&body, 1));
+	}
 	setFrozen(true);
 	Preprocessor p;
-	if (hasConflict() || !propagate(true) || !p.preprocess(*this, opts_.iters != 0 && !opts_.suppMod ? Preprocessor::full_eq : Preprocessor::no_eq, opts_.iters, opts_.dfOrder)) {
+	if (hasConflict() || !propagate(true) || !p.preprocess(*this, opts_.iters != 0 ? Preprocessor::full_eq : Preprocessor::no_eq, opts_.iters, opts_.dfOrder != 0)) {
+		setConflict();
+		return;
+	}
+	if (suppAtom && (!assignValue(suppAtom, value_false, PrgEdge::noEdge()) || !propagate(true))) {
 		setConflict();
 		return;
 	}
 	if (opts_.erMode == mode_transform_integ || opts_.erMode == mode_transform_dynamic) {
-		uint32 nAtoms = startAux_ - startAtom();
+		nAtoms -= startAtom();
 		transformIntegrity(nAtoms, std::min(uint32(15000), nAtoms*2));
 	}
 	addMinimize();
 	uint32 sccs = 0;
 	if (checkSccs) {
 		uint32 startScc = incData_ ? incData_->startScc : 0;
-		SccChecker c(*this, sccAtoms_, startScc);
+		SccChecker c(*this, auxData_->scc, startScc);
 		sccs       = c.sccs();
 		stats.sccs = (sccs-startScc);
 		if (incData_) { incData_->startScc = c.sccs(); }
@@ -741,10 +1091,69 @@ void LogicProgram::prepareProgram(bool checkSccs) {
 	else { stats.sccs = PrgNode::noScc; }
 	finalizeDisjunctions(p, sccs);
 	prepareComponents();
+	prepareOutputTable();
+	if (theory_) {
+		TFilter f = { this };
+		theory_->filter(f);
+	}
 	stats.atoms = static_cast<uint32>(atoms_.size()) - startAtom();
 	bodyIndex_.clear();
 	disjIndex_.clear();
 }
+void LogicProgram::freezeTheory() {
+	if (theory_) {
+		PrgBody* supp = 0;
+		for (TheoryData::atom_iterator it = theory_->currBegin(), end = theory_->end(); it != end; ++it) {
+			const Potassco::TheoryAtom& a = **it;
+			PrgAtom* at = 0;
+			if (a.atom() && isNew(a.atom()) && !(at = resize(a.atom()))->supports()) { 
+				if (!supp) { supp = getTrueBody(); }
+				at->markFrozen(value_free);
+				at->setIgnoreScc(true);
+				supp->addHead(at, PrgEdge::GammaChoice);
+			}
+		}
+	}
+}
+bool LogicProgram::TFilter::operator()(const Potassco::TheoryAtom& a) const {
+	Atom_t id = a.atom();
+	if (self->getLiteral(id) != lit_false() && self->getRootAtom(id)->value() != value_false) {
+		self->ctx()->setFrozen(self->getLiteral(id).var(), true);
+		return false;
+	}
+	PrgAtom* at = self->getRootAtom(id);
+	return !at->frozen();
+}
+struct LogicProgram::DlpTr : public RuleTransform::ProgramAdapter {
+	DlpTr(LogicProgram* x, EdgeType et) : self(x), type(et), scc(0) {}
+	Atom_t newAtom() {
+		CLASP_FAIL_IF(type == PrgEdge::Gamma, "shifting must not introduce new atoms!");
+		Atom_t x   = self->newAtom();
+		PrgAtom* a = self->getAtom(x);
+		self->auxData_->scc.push_back(a);
+		a->setScc(scc);
+		a->setSeen(true);
+		atoms.push_back(x);
+		return x;
+	}
+	virtual void addRule(const Rule& r) {
+		SRule meta;
+		if (!self->simplifyRule(r, rule, meta)) { return; }
+		bool gamma = type == PrgEdge::Gamma;
+		Rule rs = rule.rule();
+		PrgAtom* a = self->getAtom(rs.head[0]);
+		PrgBody* B = self->assignBodyFor(rs, meta, type, gamma);
+		if (B->value() != value_false && !B->hasHead(a, PrgEdge::Normal)) {
+			B->addHead(a, type);
+			self->stats.gammas += uint32(gamma);
+		}
+	}
+	LogicProgram* self;
+	EdgeType      type;
+	uint32        scc;
+	VarVec        atoms;
+	RuleBuilder   rule;
+};
 
 // replace disjunctions with gamma (shifted) and delta (component-shifted) rules
 void LogicProgram::finalizeDisjunctions(Preprocessor& p, uint32 numSccs) {
@@ -757,27 +1166,35 @@ void LogicProgram::finalizeDisjunctions(Preprocessor& p, uint32 numSccs) {
 	// replace disjunctions with shifted rules and non-hcf-disjunctions
 	DisjList disj; disj.swap(disjunctions_);
 	setFrozen(false);
-	uint32 shifted = 0, added = 0;
+	uint32 shifted = 0;
 	stats.nonHcfs  = uint32(nonHcfs_.size());
-	Literal bot    = negLit(0);
+	Literal bot    = lit_false();
+	DlpTr tr(this, PrgEdge::Gamma);
+	RuleTransform shifter(tr);
+	Potassco::LitVec rb;
+	VarVec rh;
 	for (uint32 id = 0, maxId = disj.size(); id != maxId; ++id) {
 		PrgDisj* d = disj[id];
 		Literal dx = d->inUpper() ? d->literal() : bot;
-		PrgEdge e  = PrgEdge::newEdge(id, PrgEdge::CHOICE_EDGE, PrgEdge::DISJ_NODE);
 		d->resetId(id, true); // id changed during scc checking
-		// remove from program and 
+		PrgEdge e  = PrgEdge::newEdge(*d, PrgEdge::Choice);
+		// remove from program and
 		// replace with shifted rules or component-shifted disjunction
 		head.clear(); supports.clear();
 		for (PrgDisj::atom_iterator it = d->begin(), end = d->end(); it != end; ++it) {
-			uint32  aId = it->node();
+			uint32  aId = *it;
 			PrgAtom* at = getAtom(aId);
 			at->removeSupport(e);
 			if (dx == bot) { continue; }
-			if (at->eq())  { 
-				at = getAtom(aId = getEqAtom(aId));
+			if (at->eq())  {
+				at = getAtom(aId = getRootId(aId));
+			}
+			if (isFact(at)){
+				dx = bot;
+				continue;
 			}
 			if (at->inUpper()) {
-				head.push_back(aId); 
+				head.push_back(aId);
 				if (at->scc() != PrgNode::noScc){ sccMap[at->scc()] = seen_scc; }
 			}
 		}
@@ -786,7 +1203,7 @@ void LogicProgram::finalizeDisjunctions(Preprocessor& p, uint32 numSccs) {
 		for (EdgeVec::iterator it = temp.begin(), end = temp.end(); it != end; ++it) {
 			PrgBody* b = getBody(it->node());
 			if (b->relevant() && b->value() != value_false) { supports.push_back(b); }
-			b->removeHead(d, PrgEdge::NORMAL_EDGE);
+			b->removeHead(d, PrgEdge::Normal);
 		}
 		d->destroy();
 		// create shortcut for supports to avoid duplications during shifting
@@ -797,131 +1214,105 @@ void LogicProgram::finalizeDisjunctions(Preprocessor& p, uint32 numSccs) {
 			if (scc == PrgNode::noScc || (sccMap[scc] & seen_scc) != 0) {
 				if (scc != PrgNode::noScc) { sccMap[scc] &= ~seen_scc; }
 				else                       { scc = UINT32_MAX; }
-				rule_.clear(); rule_.setType(DISJUNCTIVERULE);
-				rule_.addHead(*hIt);
-				if (supportLit.var() != 0) { rule_.addToBody(supportLit.var(), !supportLit.sign()); }
+				rh.assign(1, *hIt);
+				rb.clear();
+				if (supportLit.var() != 0) { rb.push_back(toInt(supportLit)); }
 				else if (supportLit.sign()){ continue; }
 				for (VarVec::iterator oIt = head.begin(); oIt != hEnd; ++oIt) {
 					if (oIt != hIt) {
-						if (getAtom(*oIt)->scc() == scc) { rule_.addHead(*oIt); }
-						else                             { rule_.addToBody(*oIt, false); }
+						if (getAtom(*oIt)->scc() == scc) { rh.push_back(*oIt); }
+						else                             { rb.push_back(Potassco::neg(*oIt)); }
 					}
 				}
-				RuleType t = simplifyRule(rule_, activeHead_, activeBody_);
-				PrgBody* B = t != ENDRULE ? assignBodyFor(activeBody_, PrgEdge::NORMAL_EDGE, true) : 0;
-				if (!B || B->value() == value_false) { continue; }
-				if (t == BASICRULE) {
-					++shifted;
-					B->addHead(getAtom(activeHead_[0]), PrgEdge::NORMAL_EDGE);
+				SRule meta;
+				if (!simplifyRule(Rule::normal(Head_t::Disjunctive, Potassco::toSpan(rh), Potassco::toSpan(rb)), rule_, meta)) {
+					continue;
 				}
-				else if (t == DISJUNCTIVERULE) {
-					PrgDisj* x = getDisjFor(activeHead_, 0);
-					B->addHead(x, PrgEdge::NORMAL_EDGE);
+				Rule sr = rule_.rule();
+				PrgBody* B = assignBodyFor(sr, meta, PrgEdge::Normal, true);
+				if (B->value() != value_false && Potassco::size(sr.head) == 1) {
+					++shifted;
+					B->addHead(getAtom(sr.head[0]), PrgEdge::Normal);
+				}
+				else if (B->value() != value_false && Potassco::size(sr.head) > 1) {
+					PrgDisj* x = getDisjFor(sr.head, 0);
+					B->addHead(x, PrgEdge::Normal);
 					x->assignVar(*this, *x->supps_begin());
 					x->setInUpper(true);
 					x->setSeen(true);
-					++added;
 					if ((sccMap[scc] & is_scc_non_hcf) == 0) {
 						sccMap[scc] |= is_scc_non_hcf;
 						nonHcfs_.add(scc);
 					}
 					if (!options().noGamma) {
-						rule_.setType(BASICRULE);
-						for (uint32 i = 1; i != rule_.heads.size(); ++i) { rule_.addToBody(rule_.heads[i], false); }
-						rule_.heads.resize(1);
-						WeightLitVec::iterator bIt = rule_.body.end();
-						for (uint32 i = x->size();;) {
-							t = simplifyRule(rule_, activeHead_, activeBody_);
-							B = t != ENDRULE ? assignBodyFor(activeBody_, PrgEdge::GAMMA_EDGE, true) : 0;
-							if (B && B->value() != value_false && !B->hasHead(getAtom(activeHead_[0]), PrgEdge::NORMAL_EDGE)) {
-								B->addHead(getAtom(activeHead_[0]), PrgEdge::GAMMA_EDGE);
-								++stats.gammas;
-							}
-							if (--i == 0) { break; }
-							Var h          = rule_.heads[0];
-							rule_.heads[0] = (--bIt)->first.var();
-							*bIt           = WeightLiteral(negLit(h), 1);
-						}
+						shifter.transform(sr);
 					}
 					else {
 						// only add support edge
 						for (PrgDisj::atom_iterator a = x->begin(), end = x->end(); a != end; ++a) {
-							B->addHead(getAtom(a->node()), PrgEdge::GAMMA_CHOICE_EDGE);
+							B->addHead(getAtom(*a), PrgEdge::GammaChoice);
 						}
 					}
 				}
 			}
 		}
 	}
-	stats.rules(DISJUNCTIVERULE).second = added;
-	stats.rules(BASICRULE).second      += shifted;
-	stats.nonHcfs  = uint32(nonHcfs_.size()) - stats.nonHcfs;
+	if (!disjunctions_.empty() && nonHcfs_.config == 0) {
+		nonHcfs_.config = ctx()->configuration()->config("tester");
+	}
+	upStat(RK(Normal), shifted);
+	stats.nonHcfs = uint32(nonHcfs_.size()) - stats.nonHcfs;
+	rh.clear();
 	setFrozen(true);
 }
-
 // optionally transform extended rules in sccs
 void LogicProgram::prepareComponents() {
-	int trRec  = opts_.erMode == mode_transform_scc;
+	int trRec = opts_.erMode == mode_transform_scc;
 	// HACK: force transformation of extended rules in non-hcf components
 	// REMOVE this once minimality check supports aggregates
 	if (!disjunctions_.empty() && trRec != 1) {
-		trRec    = 2;
+		trRec = 2;
 	}
 	if (trRec != 0) {
-		BodyList ext;
-		EdgeVec  heads;
-		for (BodyList::const_iterator it = bodies_.begin(), end = bodies_.end(); it != end; ++it) {
-			if ((*it)->type() != BodyInfo::NORMAL_BODY && (*it)->hasVar() && (*it)->value() != value_false) {
-				uint32 scc = (*it)->scc(*this);
-				if (scc != PrgNode::noScc && (trRec == 1 || nonHcfs_.find(scc))) {
-					ext.push_back(*it);
-				}
-			}
-		}
-		if (ext.empty()) { return; }
-		struct Tr : public RuleTransform::ProgramAdapter {
-			Tr(LogicProgram* x) : self(x), scc(0) {}
-			Var newAtom() {
-				Var x      = self->newAtom();
-				PrgAtom* a = self->getAtom(x);
-				self->sccAtoms_.push_back(a);
-				a->setScc(scc);
-				a->setSeen(true);
-				atoms.push_back(x);
-				return x;
-			}
-			void addRule(Rule& nr) {
-				if (self->simplifyRule(nr, self->activeHead_, self->activeBody_) != ENDRULE) {
-					PrgBody* B = self->assignBodyFor(self->activeBody_, PrgEdge::NORMAL_EDGE, false);
-					if (B->value() != value_false) {
-						B->addHead(self->getAtom(self->activeHead_[0]), PrgEdge::NORMAL_EDGE);
-					}
-				}
-			}
-			LogicProgram* self;
-			uint32 scc;
-			VarVec atoms;
-		} tr(this);
-		RuleTransform trans;
+		DlpTr tr(this, PrgEdge::Normal);
+		RuleTransform trans(tr);
+		RuleBuilder temp;
 		setFrozen(false);
-		for (BodyList::const_iterator it = ext.begin(), end = ext.end(); it != end; ++it) {
-			uint32 scc = (*it)->scc(*this);
-			rule_.clear();
-			rule_.setType((*it)->type() == BodyInfo::COUNT_BODY ? CONSTRAINTRULE : WEIGHTRULE);
-			rule_.setBound((*it)->bound());
-			tr.scc = scc;
-			for (uint32 i = 0; i != (*it)->size(); ++i) {
-				rule_.addToBody((*it)->goal(i).var(), (*it)->goal(i).sign() == false, (*it)->weight(i));
-			}
-			heads.assign((*it)->heads_begin(), (*it)->heads_end());
-			for (EdgeVec::const_iterator hIt = heads.begin(); hIt != heads.end(); ++hIt) {
+		EdgeVec heads;
+		// find recursive aggregates
+		for (uint32 bIdx = 0, bEnd = numBodies(); bIdx != bEnd; ++bIdx) {
+			PrgBody* B = bodies_[bIdx];
+			if (B->type() == Body_t::Normal || !B->hasVar() || B->value() == value_false) { continue; } // not aggregate or not relevant
+			tr.scc = B->scc(*this);
+			if (tr.scc == PrgNode::noScc || (trRec == 2 && !nonHcfs_.find(tr.scc))) { continue; } // not recursive
+			// transform all rules a :- B, where scc(a) == scc(B):
+			heads.clear();
+			for (PrgBody::head_iterator hIt = B->heads_begin(), hEnd = B->heads_end(); hIt != hEnd; ++hIt) {
 				assert(hIt->isAtom());
-				if (getAtom(hIt->node())->scc() == scc) {
-					(*it)->removeHead(getAtom(hIt->node()), hIt->type());
-					rule_.heads.assign(1, hIt->node());
-					if (simplifyRule(rule_, activeHead_, activeBody_) != ENDRULE) {
-						trans.transform(tr, rule_);	
-					}
+				if (getAtom(hIt->node())->scc() == tr.scc) { heads.push_back(*hIt); }
+			}
+			if (heads.empty()) { continue; }
+			using Potassco::Lit_t;
+			Head_t ht = !isChoice(heads[0].type()) ? Head_t::Disjunctive : Head_t::Choice;
+			Atom_t  h = heads[0].node();
+			Lit_t aux = 0;
+			if (heads.size() > 1) { // more than one head, make body eq to some new aux atom
+				ht  = Head_t::Disjunctive;
+				h   = tr.newAtom();
+				aux = Potassco::lit(h);
+			}
+			temp.clear();
+			if (!B->toData(*this, temp) || temp.bodyType() == Body_t::Normal) {
+				B->simplify(*this, true, 0);
+				continue;
+			}
+			trans.transform(Rule::sum(ht, Potassco::toSpan(&h, 1), temp.bound(), Potassco::toSpan(temp.sum(), temp.bodySize())));
+			for (EdgeVec::const_iterator hIt = heads.begin(); hIt != heads.end(); ++hIt) {
+				B->removeHead(getAtom(hIt->node()), hIt->type());
+				if (h != hIt->node()) {
+					ht = !isChoice(hIt->type()) ? Head_t::Disjunctive : Head_t::Choice;
+					h  = hIt->node();
+					tr.addRule(Rule::normal(ht, Potassco::toSpan(&h, 1), Potassco::toSpan(&aux, 1)));
 				}
 			}
 		}
@@ -933,12 +1324,27 @@ void LogicProgram::prepareComponents() {
 				ax->setInUpper(true);
 				ax->assignVar(*this, *ax->supps_begin());
 			}
-			else { assignValue(ax, value_false); }
+			else { assignValue(ax, value_false, PrgEdge::noEdge()); }
 		}
 		setFrozen(true);
 	}
 }
-
+void LogicProgram::prepareOutputTable() {
+	OutputTable& out = ctx()->output;
+	// add new output predicates in program order to output table
+	std::stable_sort(show_.begin(), show_.end(), compose22(std::less<Id_t>(), select1st<ShowPair>(), select1st<ShowPair>()));
+	for (ShowVec::iterator it = show_.begin(), end = show_.end(); it != end; ++it) {
+		Literal lit = getLiteral(it->first);
+		bool isAtom = it->first < startAuxAtom();
+		if      (!isSentinel(lit))  { out.add(it->second, lit, it->first); if (isAtom) ctx()->setOutput(lit.var(), true); }
+		else if (lit == lit_true()) { out.add(it->second); }
+	}
+	if (!auxData_->project.empty()) {
+		for (VarVec::const_iterator it = auxData_->project.begin(), end = auxData_->project.end(); it != end; ++it) {
+			out.addProject(getLiteral(*it));
+		}
+	}
+}
 // add (completion) nogoods
 bool LogicProgram::addConstraints() {
 	ClauseCreator gc(ctx()->master());
@@ -946,10 +1352,8 @@ bool LogicProgram::addConstraints() {
 		gc.addDefaultFlags(ClauseCreator::clause_force_simplify);
 	}
 	ctx()->startAddConstraints();
-	ctx()->symbolTable().endInit();
-	CLASP_ASSERT_CONTRACT(ctx()->symbolTable().curBegin() == ctx()->symbolTable().end() || startAtom() <= ctx()->symbolTable().curBegin()->first);
 	// handle initial conflict, if any
-	if (!ctx()->ok() || !ctx()->addUnary(getFalseAtom()->trueLit())) {
+	if (!ctx()->ok() || !ctx()->addUnary(getTrueAtom()->trueLit())) {
 		return false;
 	}
 	if (options().noGamma && !disjunctions_.empty()) {
@@ -957,7 +1361,7 @@ bool LogicProgram::addConstraints() {
 		for (DisjList::const_iterator it = disjunctions_.begin(); it != disjunctions_.end(); ++it) {
 			gc.start().add(~(*it)->literal());
 			for (PrgDisj::atom_iterator a = (*it)->begin(); a != (*it)->end(); ++a) {
-				gc.add(getAtom(a->node())->literal());
+				gc.add(getAtom(*a)->literal());
 			}
 			if (!gc.end()) { return false; }
 		}
@@ -970,47 +1374,133 @@ bool LogicProgram::addConstraints() {
 	for (VarIter it = unfreeze_begin(), end = unfreeze_end(); it != end; ++it) {
 		if (!toConstraint(getAtom(*it), *this, gc)) { return false; }
 	}
-	// add atoms from this step and finalize symbol table
-	typedef SymbolTable::const_iterator symbol_iterator;
-	const bool freezeAll   = incData_ && ctx()->satPrepro.get() != 0;
-	const bool freezeShown = options().freezeShown;
-	symbol_iterator sym    = ctx()->symbolTable().lower_bound(ctx()->symbolTable().curBegin(), startAtom());
-	symbol_iterator symEnd = ctx()->symbolTable().end();
-	Var             atomId = startAtom();
-	for (AtomList::const_iterator it = atoms_.begin()+atomId, end = atoms_.end(); it != end; ++it, ++atomId) {
+	// add atoms from this step
+	const bool freezeAll = incData_ && ctx()->satPrepro.get() != 0;
+	const uint32 hiAtom  = startAuxAtom();
+	uint32 id = startAtom();
+	for (AtomList::const_iterator it = atoms_.begin()+startAtom(), end = atoms_.end(); it != end; ++it, ++id) {
 		if (!toConstraint(*it, *this, gc)) { return false; }
-		if (freezeAll && (*it)->hasVar())  { ctx()->setFrozen((*it)->var(), true); }
-		if (sym != symEnd && atomId == sym->first) {
-			sym->second.lit = atoms_[getEqAtom(atomId)]->literal();
-			if (freezeShown) { ctx()->setFrozen(sym->second.lit.var(), true); }
-			++sym;
+		if (id < hiAtom && (*it)->hasVar()){
+			if (freezeAll) { ctx()->setFrozen((*it)->var(), true); }
+			ctx()->setInput((*it)->var(), true);
 		}
 	}
-	if (!sccAtoms_.empty()) {
+	if (!auxData_->scc.empty()) {
 		if (ctx()->sccGraph.get() == 0) {
-			ctx()->sccGraph = new SharedDependencyGraph(nonHcfCfg_);
+			ctx()->sccGraph = new PrgDepGraph(static_cast<PrgDepGraph::NonHcfMapType>(opts_.oldMap == 0));
 		}
 		uint32 oldNodes = ctx()->sccGraph->nodes();
-		ctx()->sccGraph->addSccs(*this, sccAtoms_, nonHcfs_);
+		ctx()->sccGraph->addSccs(*this, auxData_->scc, nonHcfs_);
 		stats.ufsNodes  = ctx()->sccGraph->nodes()-oldNodes;
-		sccAtoms_.clear();
 	}
 	return true;
+}
+void LogicProgram::addDomRules() {
+	if (auxData_->dom.empty()) { return; }
+	VarVec domVec;
+	EqVec eqVec;
+	DomRules&  doms = auxData_->dom;
+	Solver const& s = *ctx()->master();
+	// mark any previous domain atoms so that we can decide
+	// whether existing variables can be used for the atoms in doms
+	if (incData_) {
+		domVec.swap(incData_->doms);
+		for (VarVec::const_iterator it = domVec.begin(); it != domVec.end(); ++it) {
+			if (s.value(*it) == value_free) { ctx()->mark(posLit(*it)); }
+		}
+	}
+	DomRules::iterator j;
+	IndexMap::const_iterator eq;
+	DomRule r;
+	for (DomRules::iterator it = (j = doms.begin()), end = doms.end(); it != end; ++it) {
+		Literal cond = getLiteral(it->cond);
+		Literal slit = getLiteral(it->atom);
+		Var     svar = slit.var();
+		if (s.isFalse(cond) || s.value(svar) != value_free) { continue; }
+		if (s.isTrue(cond)) { it->cond = 0; cond = lit_true(); }
+		// check if atom is the root for its var
+		if (!atomState_.isSet(it->atom, AtomState::dom_flag)) {
+			if (!ctx()->marked(posLit(svar))) {
+				// var(it->atom) is not yet used - make it->atom its root
+				ctx()->mark(posLit(svar));
+				atomState_.set(it->atom, AtomState::dom_flag);
+				domVec.push_back(svar);
+			}
+			else if ((eq = domEqIndex_.find(it->atom)) != domEqIndex_.end()) {
+				// var(it->atom) is used but we already created a new var for it->atom
+				slit = posLit(svar = eq->second);
+			}
+			else {
+				// var(it->atom) is used - introduce new aux var and make it eq to lit(atom)
+				Eq n = { ctx()->addVar(Var_t::Atom, VarInfo::Nant), slit };
+				eqVec.push_back(n);
+				svar = n.var;
+				slit = posLit(svar);
+				domEqIndex_.insert(IndexMap::value_type(static_cast<uint32>(it->atom), svar));
+			}
+		}
+		*j++ = (r = *it);
+		if (slit.sign()) {
+			if      (r.type == DomModType::Sign)  { r.bias = r.bias != 0 ? -r.bias : 0; }
+			else if (r.type == DomModType::True)  { r.type = DomModType::False; }
+			else if (r.type == DomModType::False) { r.type = DomModType::True; }
+		}
+		ctx()->heuristic.add(svar, static_cast<DomModType>(r.type), r.bias, r.prio, cond);
+	}
+	if (j != doms.end()) {
+		upStat(RK(Heuristic), -static_cast<int>(doms.end() - j));
+		doms.erase(j, doms.end());
+	}
+	// cleanup var flags
+	for (VarVec::const_iterator it = domVec.begin(); it != domVec.end(); ++it) {
+		ctx()->unmark(*it);
+	}
+	if (incData_) {
+		incData_->doms.swap(domVec);
+	}
+	if (!eqVec.empty()) {
+		ctx()->startAddConstraints();
+		for (EqVec::const_iterator it = eqVec.begin(), end = eqVec.end(); it != end; ++it) {
+			// it->var == it->lit
+			ctx()->addBinary(~it->lit, posLit(it->var));
+			ctx()->addBinary( it->lit, negLit(it->var));
+		}
+	}
+}
+
+void LogicProgram::addAcycConstraint() {
+	AcycRules& acyc = auxData_->acyc;
+	if (acyc.empty()) { return; }
+	SharedContext& ctx = *this->ctx();
+	ExtDepGraph* graph = ctx.extGraph.get();
+	const Solver&    s = *ctx.master();
+	if (graph) { graph->update(); }
+	else       { ctx.extGraph = (graph = new ExtDepGraph()); }
+	for (AcycRules::const_iterator it = acyc.begin(), end = acyc.end(); it != end; ++it) {
+		Literal lit = getLiteral(it->cond);
+		if (!s.isFalse(lit)) {
+			graph->addEdge(lit, it->node[0], it->node[1]);
+		}
+		else {
+			upStat(RK(Acyc), -1);
+		}
+	}
+	if (graph->finalize(ctx) == 0) { ctx.extGraph = 0; }
 }
 #undef check_modular
 /////////////////////////////////////////////////////////////////////////////////////////
 // misc/helper functions
 /////////////////////////////////////////////////////////////////////////////////////////
-PrgAtom* LogicProgram::resize(Var atomId) {
+PrgAtom* LogicProgram::resize(Atom_t atomId) {
 	while (atoms_.size() <= AtomList::size_type(atomId)) {
 		newAtom();
 	}
-	return atoms_[getEqAtom(atomId)];
+	return getRootAtom(atomId);
 }
 
 bool LogicProgram::propagate(bool backprop) {
 	assert(frozen());
-	bool oldB = opts_.backprop;
+	bool oldB = opts_.backprop != 0;
 	opts_.backprop = backprop;
 	for (VarVec::size_type i = 0; i != propQ_.size(); ++i) {
 		PrgAtom* a = getAtom(propQ_[i]);
@@ -1028,176 +1518,185 @@ bool LogicProgram::propagate(bool backprop) {
 	propQ_.clear();
 	return true;
 }
-
-// Simplifies the rule's body:
-//   - removes duplicate literals: {a,b,a} -> {a, b}.
-//   - checks for contradictions : {a, not a}
-//   - removes literals with weight 0    : LB [a = 0, b = 2, c = 0, ...] -> LB [b = 2, ...]
-//   - reduces weights > bound() to bound:  2 [a=1, b=3] -> 2 [a=1, b=2]
-//   - merges duplicate literals         : LB [a=w1, b=w2, a=w3] -> LB [a=w1+w3, b=w2]
-//   - checks for contradiction, i.e.
-//     rule body contains both p and not p and both are needed
-//   - replaces weight constraint with cardinality constraint 
-//     if all body weights are equal
-//   - replaces weight/cardinality constraint with normal body 
-//     if sumW - minW < bound()
-RuleType LogicProgram::simplifyBody(const Rule& r, BodyInfo& info) {
-	info.reset();
-	WeightLitVec& sBody= info.lits;
-	if (r.bodyHasBound() && r.bound() <= 0) {
-		return BASICRULE;
+ValueRep LogicProgram::litVal(const PrgAtom* a, bool pos) const {
+	if (a->value() != value_free || !a->relevant()) {
+		bool vSign = a->value() == value_false || !a->relevant();
+		if  (vSign == pos) { return value_false; }
+		return a->value() != value_weak_true ? value_true : value_free;
 	}
-	sBody.reserve(r.body.size());
-	RuleType resType = r.type();
-	weight_t w       = 0;
-	weight_t BOUND   = r.bodyHasBound() ? r.bound() : std::numeric_limits<weight_t>::max();
-	weight_t bound   = r.bodyHasBound() ? r.bound() : static_cast<weight_t>(r.body.size());
-	uint32   pos     = 0;
-	uint32   hash    = 0;
-	bool     dirty   = r.bodyHasWeights();
-	Literal lit;
-	for (WeightLitVec::const_iterator it = r.body.begin(), bEnd = r.body.end(); it != bEnd; ++it) {
-		if (it->second == 0) continue; // skip irrelevant lits
-		CLASP_ASSERT_CONTRACT_MSG(it->second>0, "Positive weight expected!");
-		PrgAtom* a = resize(it->first.var());
-		lit        = Literal(a->id(), it->first.sign());// replace any eq atoms
-		w          = std::min(it->second, BOUND);       // reduce weights to bound
-		if (a->value() != value_free || !a->relevant()) {
-			bool vSign = a->value() == value_false || !a->relevant();
-			if (vSign != lit.sign()) {
-				// literal is false - drop rule?
-				if (r.bodyIsSet()) { resType = ENDRULE; break; }
-				continue;
-			}
-			else if (a->value() != value_weak_true && r.type() != OPTIMIZERULE) {
-				// literal is true - drop from rule
-				if ((bound -= w) <= 0) {
-					while (!sBody.empty()) { ruleState_.clear(sBody.back().first.var()); sBody.pop_back(); }
-					pos = hash = 0;
-					break;
-				}
-				continue;
-			}
-		}
-		if (!ruleState_.inBody(lit)) {  // literal not seen yet
-			ruleState_.addToBody(lit);    // add to simplified body
-			sBody.push_back(WeightLiteral(lit, w));
-			pos += !lit.sign();
-			hash+= hashLit(lit);
-		}
-		else if (!r.bodyIsSet()) {      // Merge duplicate lits
-			WeightLiteral& oldLit = info[info.findLit(lit)];
-			weight_t       oldW   = oldLit.second;
-			CLASP_ASSERT_CONTRACT_MSG((INT_MAX-oldW)>= w, "Integer overflow!");
-			w             = std::min(oldW + w, BOUND); // remember new weight
-			oldLit.second = w;
-			dirty         = true;
-			if (resType == CONSTRAINTRULE) {
-				resType = WEIGHTRULE;
-			}
-		}
-		else {
-			bound -= 1;
-		}
-		dirty |= ruleState_.inBody(~lit);
-	}
-	weight_t minW  = 1;
-	weight_t maxW  = 1;
-	wsum_t realSum = (wsum_t)sBody.size();
-	wsum_t sumW    = (wsum_t)sBody.size();
-	if (dirty) {
-		minW    = std::numeric_limits<weight_t>::max();
-		realSum = sumW = 0;
-		for (WeightLitVec::size_type i = 0; i != sBody.size(); ++i) {
-			lit = sBody[i].first; w = sBody[i].second;
-			minW = std::min(minW, w);
-			maxW = std::max(maxW, w);
-			sumW+= w;
-			if      (!ruleState_.inBody(~lit)) { realSum += w; }
-			else if (r.bodyIsSet())            { resType = ENDRULE; break; }
-			else if (lit.sign())               { 
-				// body contains lit and ~lit: we can achieve at most max(weight(lit), weight(~lit))
-				realSum += std::max(w, info[info.findLit(~lit)].second);
-			}
-		}
-		if (resType == OPTIMIZERULE) { bound = 0; }
-	}
-	if (resType != ENDRULE && r.bodyHasBound()) {
-		if      (bound <= 0)            { resType = BASICRULE; bound = 0; }
-		else if (realSum < bound)       { resType = ENDRULE;   }
-		else if ((sumW - minW) < bound) { resType = BASICRULE;      bound = (weight_t)sBody.size(); }
-		else if (minW == maxW)          { resType = CONSTRAINTRULE; bound = (bound+(minW-1))/minW;  }
-	}
-	if (hasWeights(r.type()) && !hasWeights(resType) && maxW > 1 && resType != ENDRULE) {
-		for (WeightLitVec::iterator it = sBody.begin(), end = sBody.end(); it != end; ++it) {
-			it->second = 1;
-		}
-	}
-	info.init(resType, bound, hash, pos);
-	return resType;
+	return value_free;
 }
 
-RuleType LogicProgram::simplifyRule(const Rule& r, VarVec& head, BodyInfo& body) {
-	RuleType type = simplifyBody(r, body);
-	head.clear();
-	if (type != ENDRULE && type != OPTIMIZERULE) {
-		bool blocked = false, taut = false;
-		weight_t sum = -1;
-		for (VarVec::const_iterator it = r.heads.begin(), end = r.heads.end(); it != end; ++it) {
-			if (!ruleState_.isSet(*it, RuleState::any_flag)) {
-				head.push_back(*it);
-				ruleState_.addToHead(*it);
-			}
-			else if (!ruleState_.isSet(*it, RuleState::head_flag)) {
-				weight_t wPos = ruleState_.inBody(posLit(*it)) ? body.weight(posLit(*it)) : 0;
-				weight_t wNeg = ruleState_.inBody(negLit(*it)) ? body.weight(negLit(*it)) : 0;
-				if (sum == -1) sum = body.sum();
-				if ((sum - wPos) < body.bound()) {
-					taut    = (type != CHOICERULE);
-				}
-				else if ((sum - wNeg) < body.bound()) {
-					blocked = (type != CHOICERULE);
-				}
-				else {
-					head.push_back(*it);
-					ruleState_.addToHead(*it);
-				}
-			}
+// Simplifies the given normal rule H :- l1, ..., ln
+//  - removes true and duplicate literals from body: {T,a,b,a} -> {a, b}.
+//  - checks for contradictions and false literals in body: {a, not a} -> F
+//  - checks for satisfied head and removes false atoms from head
+// POST: if true out contains the simplified normal rule.
+bool LogicProgram::simplifyNormal(Head_t ht, const Potassco::AtomSpan& head, const Potassco::LitSpan& body, RuleBuilder& out, SRule& meta) {
+	out.clear();
+	out.startBody();
+	meta = SRule();
+	bool ok = true;
+	for (Potassco::LitSpan::iterator it = Potassco::begin(body), end = Potassco::end(body); it != end; ++it) {
+		CLASP_FAIL_IF(Potassco::atom(*it) >= bodyId, "Atom out of bounds");
+		PrgAtom* a = resize(Potassco::atom(*it));
+		Literal  p = Literal(a->id(), *it < 0);// replace any eq atoms
+		ValueRep v = litVal(a, !p.sign());
+		if (v == value_false || atomState_.inBody(~p)) {
+			ok = false;
+			break;
 		}
-		for (VarVec::const_iterator it = head.begin(), end = head.end(); it != end; ++it) {
-			ruleState_.clear(*it);
-		}
-		if (blocked && type != DISJUNCTIVERULE) {
-			head.clear();
-			head.push_back(0);
-		}
-		else if (taut && (type == DISJUNCTIVERULE || head.empty())) {
-			head.clear();
-			type = ENDRULE;
-		}
-		else if (type == DISJUNCTIVERULE && head.size() == 1) {
-			type = BASICRULE;
-		}
-		else if (head.empty()) {
-			type = ENDRULE;
+		else if (v != value_true  && !atomState_.inBody(p)) {
+			atomState_.addToBody(p);
+			out.addGoal(toInt(p));
+			meta.pos  += !p.sign();
+			meta.hash += hashLit(p);
 		}
 	}
-	for (WeightLitVec::size_type i = 0; i != body.size(); ++i) {
-		ruleState_.clear(body[i].first.var());
+	uint32_t bs = out.bodySize();
+	meta.bid = ok ? findBody(meta.hash, Body_t::Normal, bs) : varMax;
+	ok = ok && pushHead(ht, head, 0, out);
+	for (const Potassco::Lit_t* it = out.body(); bs--;) {
+		atomState_.clearRule(Potassco::atom(*it++));
 	}
-	return type;
+	return ok;
 }
 
+struct IsLit {
+	IsLit(Potassco::Lit_t x) : lhs(x) {}
+	template <class P>
+	bool operator()(const P& rhs) const { return lhs == Potassco::lit(rhs); }
+	Potassco::Lit_t lhs;
+};
+
+// Simplifies the given sum rule: H :- lb { l1 = w1 ... ln = wn }.
+//  - removes assigned literals and updates lb accordingly
+//  - removes literals li with weight wi = 0
+//  - reduces weights wi > bound() to bound
+//  - merges duplicate literals in sum, i.e. lb {a=w1, b=w2, a=w3} -> lb {a=w1+w3, b=w2}
+//  - checks for contradiction, i.e. sum contains both p and not p and both are needed
+//  - replaces sum with count if all weights are equal
+//  - replaces sum with normal body if all literals must be true for the sum to be satisfied
+// POST: if true out contains the simplified rule.
+bool LogicProgram::simplifySum(Head_t ht, const Potassco::AtomSpan& head, const Potassco::Sum_t& body, RuleBuilder& out, SRule& meta) {
+	meta = SRule();
+	weight_t bound = body.bound, maxW = 1, minW = CLASP_WEIGHT_T_MAX, sumW = 0, dirty = 0;
+	out.clear();
+	out.startSum(bound);
+	for (Potassco::WeightLitSpan::iterator it = Potassco::begin(body.lits), end = Potassco::end(body.lits); it != end && bound > 0; ++it) {
+		CLASP_ASSERT_CONTRACT_MSG(it->weight >= 0, "Non-negative weight expected!");
+		CLASP_FAIL_IF(Potassco::atom(*it) >= bodyId, "Atom out of bounds");
+		if (it->weight == 0) continue; // skip irrelevant lits
+		PrgAtom* a = resize(Potassco::atom(*it));
+		Literal  p = Literal(a->id(), Potassco::lit(*it) < 0);// replace any eq atoms
+		ValueRep v = litVal(a, !p.sign());
+		weight_t w = Potassco::weight(*it);
+		if (v == value_true) { bound -= w; }
+		else if (v != value_false) {
+			CLASP_ASSERT_CONTRACT_MSG((CLASP_WEIGHT_T_MAX-sumW)>= w, "Integer overflow!");
+			sumW += w;
+			if (!atomState_.inBody(p)) {
+				atomState_.addToBody(p);
+				out.addGoal(toInt(p), w);
+				meta.pos += !p.sign();
+				meta.hash += hashLit(p);
+			}
+			else { // Merge duplicate lits
+				w = (std::find_if(out.sum(), out.sum() + out.bodySize(), IsLit(Potassco::lit(*it)))->weight += w);
+				++dirty;
+			}
+			if (w > maxW) { maxW = w; }
+			if (w < minW) { minW = w; }
+			dirty += static_cast<weight_t>(atomState_.inBody(~p));
+		}
+	}
+	weight_t sumR = sumW;
+	if (bound > 0 && (dirty || maxW > bound)) {
+		sumR = 0, minW = CLASP_WEIGHT_T_MAX;
+		for (Potassco::WeightLit_t* it = out.sum(), *end = out.sum() + out.bodySize(); it != end; ++it) {
+			Literal  p = toLit(it->lit);
+			weight_t w = it->weight;
+			if (w > bound) { sumW -= (w - bound); it->weight = (maxW = w = bound); }
+			if (w < minW) { minW = w; }
+			sumR += w;
+			if (p.sign() && atomState_.inBody(~p)) {
+				// body contains p and ~p: we can achieve at most max(weight(p), weight(~p))
+				sumR -= std::min(w, std::find_if(out.sum(), end, IsLit(Potassco::neg(it->lit)))->weight);
+			}
+		}
+	}
+	out.setBound(bound);
+	if (bound <= 0 || sumR < bound) {
+		for (const Potassco::WeightLit_t* it = out.sum(), *end = out.sum() + out.bodySize(); it != end; ++it) { atomState_.clearRule(Potassco::atom(*it)); }
+		return bound <= 0 && simplifyNormal(ht, head, Potassco::toSpan<Potassco::Lit_t>(), out, meta);
+	}
+	else if ((sumW - minW) < bound) {
+		out.weaken(Body_t::Normal);
+		meta.bid = findBody(meta.hash, Body_t::Normal, out.bodySize());
+		bool ok = pushHead(ht, head, 0, out);
+		for (const Potassco::Lit_t* it = out.body(), *end = it + out.bodySize(); it != end; ++it) {
+			atomState_.clearRule(Potassco::atom(*it));
+		}
+		return ok;
+	}
+	else if (minW == maxW) {
+		out.weaken(Body_t::Count, maxW != 1);
+		bound = out.bound();
+	}
+	meta.bid = findBody(meta.hash, out.bodyType(), out.bodySize(), out.bound(), out.sum());
+	bool ok  = pushHead(ht, head, sumW - out.bound(), out);
+	for (const Potassco::WeightLit_t* it = out.sum(), *end = it + out.bodySize(); it != end; ++it) {
+		atomState_.clearRule(Potassco::atom(*it));
+	}
+	return ok;
+}
+
+// Pushes the given rule head to the body given in out.
+// Pre: Body literals are marked and lits is != 0 if body is a sum.
+bool LogicProgram::pushHead(Head_t ht, const Potassco::AtomSpan& head, weight_t slack, RuleBuilder& out) {
+	const uint8 ignoreMask = AtomState::false_flag|AtomState::head_flag;
+	uint32 hs = 0;
+	bool sat = false, sum = out.bodyType() == Body_t::Sum;
+	out.start(ht);
+	for (Potassco::AtomSpan::iterator it = Potassco::begin(head), end = Potassco::end(head); it != end; ++it) {
+		if (!atomState_.isSet(*it, AtomState::simp_mask)) {
+			out.addHead(*it);
+			atomState_.addToHead(*it);
+			++hs;
+		}
+		else if (!atomState_.isSet(*it, ignoreMask)) { // h occurs in B+ and/or B- or is true
+			weight_t wp = weight_t(atomState_.inBody(posLit(*it))), wn = weight_t(atomState_.inBody(negLit(*it)));
+			if (wp && sum) { wp = std::find_if(out.sum(), out.sum() + out.bodySize(), IsLit(Potassco::lit(*it)))->weight; }
+			if (wn && sum) { wn = std::find_if(out.sum(), out.sum() + out.bodySize(), IsLit(Potassco::neg(*it)))->weight; }
+			if (atomState_.isFact(*it) || wp > slack) { sat = true; }
+			else if (wn <= slack) {
+				out.addHead(*it);
+				atomState_.addToHead(*it);
+				++hs;
+			}
+		}
+	}
+	for (const Atom_t* it = out.head(), *end = it + hs; it != end; ++it) {
+		atomState_.clearRule(*it);
+	}
+	return !sat || (ht == Head_t::Choice && hs);
+}
+
+bool LogicProgram::simplifyRule(const Rule& r, Potassco::RuleBuilder& out, SRule& meta) {
+	return r.normal()
+		? simplifyNormal(r.ht, r.head, r.cond, out, meta)
+		: simplifySum(r.ht, r.head, r.agg, out, meta);
+}
 // create new atom aux representing supports, i.e.
 // aux == S1 v ... v Sn
 Literal LogicProgram::getEqAtomLit(Literal lit, const BodyList& supports, Preprocessor& p, const SccMap& sccMap) {
-	if (supports.empty() || lit == negLit(0)) { return negLit(0); }
-	if (supports.size() == 1 && supports[0]->size() < 2) { 
-		return supports[0]->size() == 0 ? posLit(0) : supports[0]->goal(0); 
+	if (supports.empty() || lit == lit_false()) { return lit_false(); }
+	if (supports.size() == 1 && supports[0]->size() < 2) {
+		return supports[0]->size() == 0 ? lit_true() : supports[0]->goal(0);
 	}
 	if (p.getRootAtom(lit) != varMax)         { return posLit(p.getRootAtom(lit)); }
 	incTrAux(1);
-	Var auxV     = newAtom();
+	Atom_t auxV  = newAtom();
 	PrgAtom* aux = getAtom(auxV);
 	uint32 scc   = PrgNode::noScc;
 	aux->setLiteral(lit);
@@ -1210,49 +1709,54 @@ Literal LogicProgram::getEqAtomLit(Literal lit, const BodyList& supports, Prepro
 				uint32 aScc = getAtom(b->goal(g).var())->scc();
 				if (aScc != PrgNode::noScc && (sccMap[aScc] & 1u)) { scc = aScc; }
 			}
-			b->addHead(aux, PrgEdge::NORMAL_EDGE);
-			if (b->value() != aux->value()) { assignValue(aux, b->value()); }
+			b->addHead(aux, PrgEdge::Normal);
+			if (b->value() != aux->value()) { assignValue(aux, b->value(), PrgEdge::newEdge(*b, PrgEdge::Normal)); }
 			aux->setInUpper(true);
 		}
 	}
 	if (!aux->inUpper()) {
 		aux->setValue(value_false);
-		return negLit(0);
+		return lit_false();
 	}
 	else if (scc != PrgNode::noScc) {
 		aux->setScc(scc);
-		sccAtoms_.push_back(aux);
+		auxData_->scc.push_back(aux);
 	}
 	return posLit(auxV);
 }
 
-PrgBody* LogicProgram::getBodyFor(BodyInfo& body, bool addDeps) {
-	uint32 bodyId = equalBody(bodyIndex_.equal_range(body.hash), body);
-	if (bodyId != varMax) {
-		return getBody(bodyId);
+PrgBody* LogicProgram::getBodyFor(const Rule& r, const SRule& meta, bool addDeps) {
+	if (meta.bid < bodies_.size()) {
+		return getBody(meta.bid);
 	}
 	// no corresponding body exists, create a new object
-	bodyId        = (uint32)bodies_.size();
-	PrgBody* b    = PrgBody::create(*this, bodyId, body, addDeps);
-	bodyIndex_.insert(IndexMap::value_type(body.hash, bodyId));
+	PrgBody* b = PrgBody::create(*this, numBodies(), r, meta.pos, addDeps);
+	bodyIndex_.insert(IndexMap::value_type(meta.hash, b->id()));
 	bodies_.push_back(b);
 	if (b->isSupported()) {
-		initialSupp_.push_back(bodyId);
+		initialSupp_.push_back(b->id());
 	}
+	upStat(r.bt);
 	return b;
 }
-
-PrgBody* LogicProgram::assignBodyFor(BodyInfo& body, EdgeType depEdge, bool simpStrong) {
-	PrgBody* b = getBodyFor(body, depEdge != PrgEdge::GAMMA_EDGE);
+PrgBody* LogicProgram::getTrueBody() {
+	uint32 id = findBody(0, Body_t::Normal, 0);
+	if (id < bodies_.size()) {
+		return getBody(id);
+	}
+	return getBodyFor(Rule::normal(Head_t::Choice, Potassco::toSpan<Atom_t>(), Potassco::toSpan<Potassco::Lit_t>()), SRule());
+}
+PrgBody* LogicProgram::assignBodyFor(const Rule& r, const SRule& meta, EdgeType depEdge, bool simpStrong) {
+	PrgBody* b = getBodyFor(r, meta, depEdge != PrgEdge::Gamma);
 	if (!b->hasVar() && !b->seen()) {
 		uint32 eqId;
 		b->markDirty();
 		b->simplify(*this, simpStrong, &eqId);
 		if (eqId != b->id()) {
 			assert(b->id() == bodies_.size()-1);
-			removeBody(b, body.hash);
+			removeBody(b, meta.hash);
 			bodies_.pop_back();
-			if (depEdge != PrgEdge::GAMMA_EDGE) {
+			if (depEdge != PrgEdge::Gamma) {
 				for (uint32 i = 0; i != b->size(); ++i) {
 					getAtom(b->goal(i).var())->removeDep(b->id(), !b->goal(i).sign());
 				}
@@ -1266,61 +1770,96 @@ PrgBody* LogicProgram::assignBodyFor(BodyInfo& body, EdgeType depEdge, bool simp
 	return b;
 }
 
-uint32 LogicProgram::equalBody(const IndexRange& range, BodyInfo& body) const {
-	bool sorted = false;
-	for (IndexIter it = range.first; it != range.second; ++it) {
-		PrgBody& o = *bodies_[it->second];
-		if (o.type() == body.type() && o.size() == body.size() && o.bound() == body.bound() && (body.posSize() == 0u || o.goal(body.posSize()-1).sign() == false)) {
-			// bodies are structurally equivalent - check if they contain the same literals
-			if ((o.relevant() || (o.eq() && getBody(o.id())->relevant())) && o.eqLits(body.lits, sorted)) {
-				assert(o.id() == it->second || o.eq());
-				return o.id();
-			}
-		}
+bool LogicProgram::equalLits(const PrgBody& b, const WeightLitSpan& lits) const {
+	WeightLitSpan::iterator lBeg = Potassco::begin(lits), lEnd = Potassco::end(lits);
+	for (uint32 i = 0, end = b.size(); i != end; ++i) {
+		Potassco::WeightLit_t wl = { toInt(b.goal(i)), b.weight(i) };
+		if (!std::binary_search(lBeg, lEnd, wl)) { return false; }
 	}
-	return varMax;
+	return true;
 }
-uint32 LogicProgram::findEqBody(PrgBody* b, uint32 hash) {
-	LogicProgram::IndexRange eqRange = bodyIndex_.equal_range(hash);
-	// check for existing body
-	if (eqRange.first != eqRange.second) {
-		activeBody_.reset();
-		WeightLitVec& lits = activeBody_.lits;
-		uint32 p = 0;
-		for (uint32 i = 0, end = b->size(); i != end; ++i) { 
-			lits.push_back(WeightLiteral(b->goal(i), b->weight(i))); 
-			p += !lits.back().first.sign(); 
+
+// Pre: all literals in body are marked.
+uint32 LogicProgram::findBody(uint32 hash, Body_t type, uint32 size, weight_t bound, Potassco::WeightLit_t* sum) {
+	IndexRange bodies = bodyIndex_.equal_range(hash);
+	bool sorted = false;
+	if (type == Body_t::Normal) { bound = static_cast<weight_t>(size); }
+	for (IndexIter it = bodies.first; it != bodies.second; ++it) {
+		const PrgBody& b = *getBody(it->second);
+		if (!checkBody(b, type, size, bound) || !atomState_.inBody(b.goals_begin(), b.goals_end())) {
+			continue;
 		}
-		activeBody_.init(b->type(), b->bound(), hash, p);
-		return equalBody(eqRange, activeBody_);
+		else if (!b.hasWeights()) {
+			return b.id();
+		}
+		else if (sum) {
+			if (!sorted) {
+				std::sort(sum, sum + size);
+				sorted = true;
+			}
+			if (equalLits(b, Potassco::toSpan(sum, size))) { return b.id(); }
+		}
 	}
 	return varMax;
 }
 
-PrgDisj* LogicProgram::getDisjFor(const VarVec& heads, uint32 headHash) {
+uint32 LogicProgram::findEqBody(const PrgBody* b, uint32 hash) {
+	IndexRange bodies = bodyIndex_.equal_range(hash);
+	if (bodies.first == bodies.second)  { return varMax;  }
+	uint32 eqId = varMax, n = 0;
+	for (IndexIter it = bodies.first; it != bodies.second && eqId == varMax; ++it) {
+		const PrgBody& rhs = *getBody(it->second);
+		if (!checkBody(rhs, b->type(), b->size(), b->bound())) { continue; }
+		else if (b->size() == 0)  { eqId = rhs.id(); }
+		else if (b->size() == 1)  { eqId = b->goal(0) == rhs.goal(0) && b->weight(0) == rhs.weight(0) ? rhs.id() : varMax; }
+		else {
+			if (++n == 1) { std::for_each(b->goals_begin(), b->goals_end(), std::bind1st(std::mem_fun(&AtomState::addToBody), &atomState_)); }
+			if      (!atomState_.inBody(rhs.goals_begin(), rhs.goals_end())) { continue; }
+			else if (!b->hasWeights()) { eqId = rhs.id(); }
+			else {
+				if (n == 1 || rule_.bodySize() == 0) {
+					rule_.clear();
+					if (!b->toData(*this, rule_) || rule_.bodyType() != Body_t::Sum) { 
+						rule_.clear();
+						continue; 
+					}
+					std::sort(rule_.sum(), rule_.sum() + rule_.bodySize());
+				}
+				if (equalLits(rhs, Potassco::toSpan(rule_.sum(), rule_.bodySize()))) { eqId = rhs.id(); }
+			}
+		}
+	}
+	if (n) {
+		rule_.clear();
+		std::for_each(b->goals_begin(), b->goals_end(), std::bind1st(std::mem_fun(&AtomState::clearBody), &atomState_));
+	}
+	return eqId;
+}
+
+PrgDisj* LogicProgram::getDisjFor(const Potassco::AtomSpan& head, uint32 headHash) {
 	PrgDisj* d = 0;
 	if (headHash) {
 		LogicProgram::IndexRange eqRange = disjIndex_.equal_range(headHash);
 		for (; eqRange.first != eqRange.second; ++eqRange.first) {
 			PrgDisj& o = *disjunctions_[eqRange.first->second];
-			if (o.relevant() && o.size() == heads.size() && ruleState_.allMarked(o.begin(), o.end(), RuleState::head_flag)) {
+			if (o.relevant() && o.size() == Potassco::size(head) && atomState_.allMarked(o.begin(), o.end(), AtomState::head_flag)) {
 				assert(o.id() == eqRange.first->second);
 				d = &o;
 				break;
 			}
 		}
-		for (VarVec::const_iterator it = heads.begin(), end = heads.end(); it != end; ++it) {
-			ruleState_.clear(*it);
+		for (Potassco::AtomSpan::iterator it = Potassco::begin(head), end = Potassco::end(head); it != end; ++it) {
+			atomState_.clearRule(*it);
 		}
 	}
 	if (!d) {
 		// no corresponding disjunction exists, create a new object
 		// and link it to all atoms
-		uint32 id    = disjunctions_.size();
-		d            = PrgDisj::create(id, heads);
+		++stats.disjunctions[statsId_];
+		d = PrgDisj::create((uint32)disjunctions_.size(), head);
 		disjunctions_.push_back(d);
-		PrgEdge edge = PrgEdge::newEdge(id, PrgEdge::CHOICE_EDGE, PrgEdge::DISJ_NODE);
-		for (VarVec::const_iterator it = heads.begin(), end = heads.end(); it != end; ++it) {
+		PrgEdge edge = PrgEdge::newEdge(*d, PrgEdge::Choice);
+		for (Potassco::AtomSpan::iterator it = Potassco::begin(head), end = Potassco::end(head); it != end; ++it) {
 			getAtom(*it)->addSupport(edge);
 		}
 		if (headHash) {
@@ -1336,7 +1875,7 @@ uint32 LogicProgram::update(PrgBody* body, uint32 oldHash, uint32 newHash) {
 	if (body->relevant()) {
 		uint32 eqId = findEqBody(body, newHash);
 		if (eqId == varMax) {
-			// No equivalent body found. 
+			// No equivalent body found.
 			// Add new entry to index
 			bodyIndex_.insert(IndexMap::value_type(newHash, id));
 		}
@@ -1359,16 +1898,15 @@ uint32 LogicProgram::removeBody(PrgBody* b, uint32 hash) {
 	return id;
 }
 
-PrgAtom* LogicProgram::mergeEqAtoms(PrgAtom* a, Var rootId) {
-	rootId        = getEqAtom(rootId);
-	PrgAtom* root = getAtom(rootId);
+PrgAtom* LogicProgram::mergeEqAtoms(PrgAtom* a, Id_t rootId) {
+	PrgAtom* root = getAtom(rootId = getRootId(rootId));
 	ValueRep mv   = getMergeValue(a, root);	
 	assert(!a->eq() && !root->eq() && !a->frozen());
 	if (a->ignoreScc()) { root->setIgnoreScc(true); }
-	if (mv != a->value()    && !assignValue(a, mv))   { return 0; }
-	if (mv != root->value() && !assignValue(root, mv)){ return 0; }
+	if (mv != a->value()    && !assignValue(a, mv, PrgEdge::noEdge()))   { return 0; }
+	if (mv != root->value() && !assignValue(root, mv, PrgEdge::noEdge())){ return 0; }
 	a->setEq(rootId);
-	incEqs(Var_t::atom_var);
+	incEqs(Var_t::Atom);
 	return root;
 }
 
@@ -1379,41 +1917,34 @@ bool LogicProgram::positiveLoopSafe(PrgBody* body, PrgBody* root) const {
 	return i == root->size() || root->goal(i).sign();	
 }
 
-PrgBody* LogicProgram::mergeEqBodies(PrgBody* b, Var rootId, bool hashEq, bool atomsAssigned) {
-	rootId        = getEqNode(bodies_, rootId);
-	PrgBody* root = getBody(rootId);
-	bool     bp   = options().backprop;
+PrgBody* LogicProgram::mergeEqBodies(PrgBody* b, Id_t rootId, bool hashEq, bool atomsAssigned) {
+	PrgBody* root = getBody(rootId = getEqNode(bodies_, rootId));
+	bool     bp   = options().backprop != 0;
 	if (b == root) { return root; }
 	assert(!b->eq() && !root->eq() && (hashEq || b->literal() == root->literal()));
 	if (!b->simplifyHeads(*this, atomsAssigned) || (b->value() != root->value() && (!mergeValue(b, root) || !root->propagateValue(*this, bp) || !b->propagateValue(*this, bp)))) {
-		setConflict(); 
-		return 0; 
+		setConflict();
+		return 0;
 	}
 	if (hashEq || positiveLoopSafe(b, root)) {
 		b->setLiteral(root->literal());
 		if (!root->mergeHeads(*this, *b, atomsAssigned, !hashEq)) {
-			setConflict(); 
+			setConflict();
 			return 0;
 		}
-		incEqs(Var_t::body_var);
+		incEqs(Var_t::Body);
 		b->setEq(rootId);
 		return root;
 	}
 	return b;
 }
 
-uint32 LogicProgram::findLpFalseAtom() const {
-	for (VarVec::size_type i = 1; i < atoms_.size(); ++i) {
-		if (!atoms_[i]->eq() && atoms_[i]->value() == value_false) {
-			return i;
-		}
+const char* LogicProgram::findName(Atom_t x) const {
+	for (OutputTable::pred_iterator it = ctx()->output.pred_begin(), end = ctx()->output.pred_end(); it != end; ++it) {
+		if (it->user == x) { return it->name; }
 	}
-	return 0;
-}
-
-const char* LogicProgram::getAtomName(Var id) const {
-	if (const SymbolTable::symbol_type* x = ctx()->symbolTable().find(id)) {
-		return x->name.c_str();
+	for (ShowVec::const_iterator it = show_.begin(), end = show_.end(); it != end; ++it) {
+		if (it->first == x){ return it->second; }
 	}
 	return "";
 }
@@ -1424,45 +1955,99 @@ VarVec& LogicProgram::getSupportedBodies(bool sorted) {
 	return initialSupp_;
 }
 
-bool LogicProgram::transform(const PrgBody& body, BodyInfo& out) const {
-	out.reset();
-	out.lits.reserve(body.size());
-	uint32 p = 0, end = body.size();
-	while (p != end && !body.goal(p).sign()) { ++p; }
-	uint32 R[2][2] = { {p, end}, {0, p} };
-	weight_t sw = 0, st = 0;
-	for (uint32 range = 0; range != 2; ++range) {
-		for (uint32 x = R[range][0]; x != R[range][1]; ++x) {
-			WeightLiteral wl(body.goal(x), body.weight(x));
-			if (getAtom(wl.first.var())->hasVar()) {
-				sw += wl.second;
-				out.lits.push_back(wl);
-			}
-			else if (wl.first.sign()) {
-				st += wl.second;
-			}
+Atom_t LogicProgram::falseAtom() {
+	Atom_t aFalse = 0;
+	for (VarVec::size_type i = 1; i < atoms_.size() && !aFalse; ++i) {
+		if (atoms_[i]->value() == value_false || atomState_.isSet(i, AtomState::false_flag)) {
+			aFalse = i;
 		}
 	}
-	out.init(body.type(), std::max(body.bound() - st, weight_t(0)), 0, p);
-	return sw >= out.bound();
+	if (!aFalse) {
+		bool s = frozen();
+		setFrozen(false);
+		aFalse = newAtom();
+		assignValue(getAtom(aFalse), value_false, PrgEdge::noEdge());
+		setFrozen(s);
+	}
+	return aFalse;
 }
 
-void LogicProgram::transform(const MinimizeRule& body, BodyInfo& out) const {
-	out.reset();
-	uint32 pos = 0;
-	for (WeightLitVec::const_iterator it = body.lits_.begin(), end = body.lits_.end(); it != end; ++it) {
-		if (it->first.sign() && getAtom(it->first.var())->hasVar()) {
-			out.lits.push_back(*it);
-		}
+bool LogicProgram::extractCondition(Id_t id, Potassco::LitVec& out) const {
+	out.clear();
+	if (id == Clasp::Asp::falseId || (frozen() && getLiteral(id) == lit_false())) { return false; }
+	if (!id || isAtom(id)) {
+		out.assign(id != 0, Potassco::lit(id));
+		return true;
 	}
-	for (WeightLitVec::const_iterator it = body.lits_.begin(), end = body.lits_.end(); it != end; ++it) {
-		if (!it->first.sign() && getAtom(it->first.var())->hasVar()) {
-			out.lits.push_back(*it);
-			++pos;
-		}
+	Id_t bId = nodeId(id);
+	CLASP_FAIL_IF(!validBody(bId), "Invalid literal");
+	const PrgBody* B = getBody(getEqBody(bId));
+	out.reserve(B->size());
+	for (PrgBody::goal_iterator it = B->goals_begin(), end = B->goals_end(); it != end; ++it) {
+		out.push_back( toInt(*it) );
 	}
-	out.init(BodyInfo::SUM_BODY, -1, 0, pos);
+	return true;
 }
+#undef RT
+/////////////////////////////////////////////////////////////////////////////////////////
+// class LogicProgramAdapter
+/////////////////////////////////////////////////////////////////////////////////////////
+LogicProgramAdapter::LogicProgramAdapter(LogicProgram& prg) : lp_(&prg), inc_(false) {}
+void LogicProgramAdapter::initProgram(bool inc) { 
+	inc_ = inc;
+}
+void LogicProgramAdapter::beginStep() {
+	if (inc_ || lp_->frozen()) { lp_->updateProgram(); } 
+}
+void LogicProgramAdapter::endStep() {
 
+}
+void LogicProgramAdapter::rule(Potassco::Head_t ht, const Potassco::AtomSpan& head, const Potassco::LitSpan& body) {
+	lp_->addRule(ht, head, body); 
+}
+void LogicProgramAdapter::rule(Potassco::Head_t ht, const Potassco::AtomSpan& head, Potassco::Weight_t bound, const Potassco::WeightLitSpan& body) {
+	lp_->addRule(ht, head, bound, body); 
+}
+void LogicProgramAdapter::minimize(Potassco::Weight_t prio, const Potassco::WeightLitSpan& lits) {
+	lp_->addMinimize(prio, lits); 
+}
+void LogicProgramAdapter::project(const Potassco::AtomSpan& atoms) {
+	lp_->addProject(atoms); 
+}
+void LogicProgramAdapter::output(const Potassco::StringSpan& str, const Potassco::LitSpan& cond) {
+	lp_->addOutput(ConstString(str), cond);
+}
+void LogicProgramAdapter::external(Potassco::Atom_t a, Potassco::Value_t v) {
+	if (v != Potassco::Value_t::Release) { lp_->freeze(a, static_cast<ValueRep>(v)); }
+	else { lp_->unfreeze(a); }
+}
+void LogicProgramAdapter::assume(const Potassco::LitSpan& lits) {
+	lp_->addAssumption(lits); 
+}
+void LogicProgramAdapter::heuristic(Potassco::Atom_t a, Potassco::Heuristic_t t, int bias, unsigned prio, const Potassco::LitSpan& cond) {
+	lp_->addDomHeuristic(a, t, bias, prio, cond); 
+}
+void LogicProgramAdapter::acycEdge(int s, int t, const Potassco::LitSpan& cond) {
+	lp_->addAcycEdge(static_cast<uint32>(s), static_cast<uint32>(t), cond); 
+}
+void LogicProgramAdapter::theoryTerm(Potassco::Id_t termId, int number) {
+	lp_->theoryData().addTerm(termId, number);
+}
+void LogicProgramAdapter::theoryTerm(Potassco::Id_t termId, const Potassco::StringSpan& name) {
+	lp_->theoryData().addTerm(termId, name);
+}
+void LogicProgramAdapter::theoryTerm(Potassco::Id_t termId, int cId, const Potassco::IdSpan& args) {
+	if (cId >= 0) { lp_->theoryData().addTerm(termId, static_cast<Potassco::Id_t>(cId), args); }
+	else { lp_->theoryData().addTerm(termId, static_cast<Potassco::Tuple_t>(cId), args); }
+}
+void LogicProgramAdapter::theoryElement(Potassco::Id_t elementId, const Potassco::IdSpan& terms, const Potassco::LitSpan& cond) {
+	lp_->theoryData().addElement(elementId, terms, lp_->newCondition(cond));
+}
+void LogicProgramAdapter::theoryAtom(Potassco::Id_t atomOrZero, Potassco::Id_t termId, const Potassco::IdSpan& elements) {
+	lp_->theoryData().addAtom(atomOrZero, termId, elements);
+}
+void LogicProgramAdapter::theoryAtom(Potassco::Id_t atomOrZero, Potassco::Id_t termId, const Potassco::IdSpan& elements, Potassco::Id_t op, Potassco::Id_t rhs) {
+	lp_->theoryData().addAtom(atomOrZero, termId, elements, op, rhs);
+}
 } } // end namespace Asp
 

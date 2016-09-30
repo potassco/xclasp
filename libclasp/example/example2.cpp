@@ -39,10 +39,20 @@ class ModelPrinter : public Clasp::EventHandler {
 public:
 	ModelPrinter() {}
 	bool onModel(const Clasp::Solver& s, const Clasp::Model& m) {
-		printModel(s.symbolTable(), m);
+		printModel(s.outputTable(), m);
 		return true;
 	}
 };
+
+void addSimpleProgram(Clasp::Asp::LogicProgram& prg) {
+	Potassco::Atom_t a = prg.newAtom();
+	Potassco::Atom_t b = prg.newAtom();
+	Potassco::RuleBuilder rb;
+	prg.addRule(rb.start().addHead(a).addGoal(Potassco::neg(b)));
+	prg.addRule(rb.start().addHead(b).addGoal(Potassco::neg(a)));
+	prg.addOutput("a", a);
+	prg.addOutput("b", b);
+}
 
 void example2() {
 	// Aggregates configuration options.
@@ -64,11 +74,7 @@ void example2() {
 	// The returned object is already setup and ready to use.
 	// See logic_program.h for details.
 	Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config);
-	asp.setAtomName(1, "a");
-	asp.setAtomName(2, "b");
-	asp.startRule(Clasp::Asp::BASICRULE).addHead(1).addToBody(2, false).endRule();
-	asp.startRule(Clasp::Asp::BASICRULE).addHead(2).addToBody(1, false).endRule();
-	
+	addSimpleProgram(asp);
 	// We are done with problem setup. 
 	// Prepare the problem for solving.
 	libclasp.prepare();

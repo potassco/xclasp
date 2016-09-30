@@ -17,11 +17,15 @@
 // along with Clasp; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
-
+//! \file
+//! \brief Global and platform-dependent stuff.
 #ifndef CLASP_PLATFORM_H_INCLUDED
 #define CLASP_PLATFORM_H_INCLUDED
 #ifdef _MSC_VER
 #pragma once
+#endif
+#if !defined(WITH_THREADS)
+#error Invalid thread configuration - use WITH_THREADS=0 for single-threaded or WITH_THREADS=1 for multi-threaded version of libclasp!
 #endif
 
 #define STRING2(x) #x
@@ -30,6 +34,13 @@
 #if defined(_MSC_VER) && _MSC_VER >= 1200
 #define CLASP_PRAGMA_TODO(X) __pragma(message(__FILE__ "(" STRING(__LINE__) ") : TODO: " X))
 #define FUNC_NAME __FUNCTION__
+#define CLASP_WARNING_BEGIN_RELAXED \
+	__pragma(warning(push))\
+	__pragma(warning (disable : 4200))
+
+#define CLASP_WARNING_END_RELAXED \
+	__pragma(warning(pop))
+
 #include <basetsd.h>
 #if _MSC_VER >= 1600
 #include <stdint.h>
@@ -45,12 +56,6 @@ typedef UINT_PTR  uintp;
 typedef INT16     int16;
 #define PRIu64 "llu"
 #define PRId64 "lld"
-template <unsigned> struct Uint_t;
-template <> struct Uint_t<sizeof(uint8)>  { typedef uint8  type; };
-template <> struct Uint_t<sizeof(uint16)> { typedef uint16 type; };
-template <> struct Uint_t<sizeof(uint32)> { typedef uint32 type; };
-template <> struct Uint_t<sizeof(uint64)> { typedef uint64 type; };
-#define BIT_MASK(x,n) ( static_cast<Uint_t<sizeof((x))>::type>(1) << (n) )
 #elif defined(__GNUC__) && __GNUC__ >= 3
 #define FUNC_NAME __PRETTY_FUNCTION__
 #if !defined(__STDC_FORMAT_MACROS)
@@ -65,7 +70,6 @@ typedef uint32_t  uint32;
 typedef uint64_t  uint64;
 typedef int64_t   int64;
 typedef uintptr_t uintp;
-#define BIT_MASK(x,n) ( static_cast<__typeof((x))>(1)<<(n) )
 #define APPLY_PRAGMA(x) _Pragma (#x)
 #define CLASP_PRAGMA_TODO(x) APPLY_PRAGMA(message ("TODO: " #x))
 #else 
@@ -89,24 +93,13 @@ typedef uintptr_t uintp;
 #ifndef INT16_MIN
 #define	INT16_MIN (-INT16_MAX - 1)
 #endif
+#ifndef UINT16_MAX
+#define	UINT16_MAX (65535U)
+#endif
 #ifndef FUNC_NAME
 #define FUNC_NAME __FILE__
 #endif
 
-// set, clear, toggle bit n of x and return new value
-#define set_bit(x,n)   ( (x) |  BIT_MASK((x),(n)) )
-#define clear_bit(x,n) ( (x) & ~BIT_MASK((x),(n)) )
-#define toggle_bit(x,n)( (x) ^  BIT_MASK((x),(n)) )
-
-// set, clear, toggle bit n of x and store new value in x
-#define store_set_bit(x,n)   ( (x) |=  BIT_MASK((x),(n)) )
-#define store_clear_bit(x,n) ( (x) &= ~BIT_MASK((x),(n)) )
-#define store_toggle_bit(x,n)( (x) ^=  BIT_MASK((x),(n)) )
-
-// return true if bit n in x is set
-#define test_bit(x,n)  ( ((x) & BIT_MASK((x),(n))) != 0 )
-
-#define right_most_bit(x) ( (x) & (-(x)) )
 
 template <class T>
 bool aligned(void* mem) {
@@ -120,6 +113,26 @@ bool aligned(void* mem) {
 	return (x & (sizeof(AL)-sizeof(T))) == 0;
 #endif
 }
+
+#if !defined(CLASP_WARNING_BEGIN_RELAXED)
+#	undef CLASP_WARNING_END_RELAXED
+#	if defined(__clang__)
+#		define CLASP_WARNING_BEGIN_RELAXED \
+		_Pragma("clang diagnostic push") \
+		_Pragma("clang diagnostic ignored \"-Wzero-length-array\"")
+#		define CLASP_WARNING_END_RELAXED _Pragma("clang diagnostic pop")
+#	elif defined(__GNUC__)
+#		define CLASP_WARNING_BEGIN_RELAXED \
+		_Pragma("GCC diagnostic push")\
+		_Pragma("GCC diagnostic ignored \"-Wpragmas\"")\
+		_Pragma("GCC diagnostic ignored \"-Wpedantic\"")\
+		_Pragma("GCC diagnostic ignored \"-pedantic\"")
+#		define CLASP_WARNING_END_RELAXED _Pragma("GCC diagnostic pop")
+#	else
+#		define CLASP_WARNING_BEGIN_RELAXED
+#		define CLASP_WARNING_END_RELAXED
+#	endif
+#endif
 
 #if !defined(CLASP_HAS_STATIC_ASSERT)
 #	if defined(__cplusplus) && __cplusplus >= 201103L 
@@ -136,19 +149,41 @@ bool aligned(void* mem) {
 #if !defined(CLASP_HAS_STATIC_ASSERT) || CLASP_HAS_STATIC_ASSERT == 0
 template <bool> struct static_assertion;
 template <>     struct static_assertion<true> {};
-#define static_assert(x, message) (void)sizeof(static_assertion< (x) >)
+#ifndef __GNUC__
+#define static_assert(x, message) typedef bool clasp_static_assertion[sizeof(static_assertion< (x) >)] 
+#else
+#define static_assert(x, message) typedef bool clasp_static_assertion[sizeof(static_assertion< (x) >)]  __attribute__((__unused__))
 #endif
-
-extern const char* clasp_format_error(const char* m, ...);
+#endif
+#include <stdlib.h>
+#include <string.h>
 extern const char* clasp_format(char* buf, unsigned size, const char* m, ...);
+class ClaspStringBuffer {
+public:
+	ClaspStringBuffer() { fix_[0] = 0; buf_ = pos_ = fix_; end_ = buf_ + sizeof(fix_); }
+	~ClaspStringBuffer();
+	const char* c_str() const { return buf_; }
+	operator const char*() const { return c_str(); }
+	ClaspStringBuffer& appendFormat(const char* fmt, ...);
+	ClaspStringBuffer& append(const char* str);
+	size_t size() const { return static_cast<size_t>(pos_ - buf_); }
+private:
+	ClaspStringBuffer(const ClaspStringBuffer&);
+	ClaspStringBuffer& operator=(const ClaspStringBuffer&);
+	bool grow(size_t nItems);
+	char* buf_;
+	char* pos_;
+	char* end_;
+	char  fix_[512];
+};
 
-#define CLASP_FAIL_IF(exp, fmt, ...) \
-	(void)( (!(exp)) || (throw std::logic_error(clasp_format_error(fmt, ##__VA_ARGS__ )), 0))	
+#define CLASP_FAIL_IF(exp, ...) \
+	(void)( (!(exp)) || (throw std::logic_error(ClaspStringBuffer().appendFormat(__VA_ARGS__).c_str()), 0))	
 
 #ifndef CLASP_NO_ASSERT_CONTRACT
 
 #define CLASP_ASSERT_CONTRACT_MSG(exp, msg) \
-	(void)( (!!(exp)) || (throw std::logic_error(clasp_format_error("%s@%d: contract violated: %s", FUNC_NAME, __LINE__, (msg))), 0))
+	(void)( (!!(exp)) || (throw std::logic_error(ClaspStringBuffer().appendFormat("%s@%d: contract violated: %s", FUNC_NAME, __LINE__, (msg)).c_str()), 0))
 
 #else
 #include <cassert>
@@ -162,7 +197,6 @@ extern const char* clasp_format(char* buf, unsigned size, const char* m, ...);
 #define CLASP_PRAGMA_TODO(X)
 #endif
 
-#include <stdlib.h>
 #if _WIN32||_WIN64
 #include <malloc.h>
 inline void* alignedAlloc(size_t size, size_t align) { return _aligned_malloc(size, align); }
@@ -170,8 +204,7 @@ inline void  alignedFree(void* p)                    { _aligned_free(p); }
 #else
 inline void* alignedAlloc(size_t size, size_t align) {
 	void* result = 0;
-	posix_memalign(&result, align, size);
-	return result;
+	return posix_memalign(&result, align, size) == 0 ? result : static_cast<void*>(0);
 }
 inline void alignedFree(void* p) { free(p); }
 #endif

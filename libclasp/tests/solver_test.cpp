@@ -20,11 +20,12 @@
 #include "test.h"
 #include <clasp/solver.h>
 #include <clasp/clause.h>
-
+#include <clasp/statistics.h>
+#include <clasp/weight_constraint.h>
 namespace Clasp { namespace Test {
 using namespace Clasp::mt;
-struct TestingConstraint : public LearntConstraint {
-	TestingConstraint(bool* del = 0, ConstraintType t = Constraint_t::static_constraint) 
+struct TestingConstraint : public Constraint {
+	TestingConstraint(bool* del = 0, ConstraintType t = Constraint_t::Static) 
 		: type_(t), propagates(0), undos(0), sat(false), keepWatch(true), setConflict(false), deleted(del) {}
 	Constraint* cloneAttach(Solver&) { 
 		return new TestingConstraint(0, type_);
@@ -40,7 +41,16 @@ struct TestingConstraint : public LearntConstraint {
 	void reason(Solver&, Literal, LitVec& out) { out = ante; }
 	void destroy(Solver* s, bool b) {
 		if (deleted) *deleted = true;
-		LearntConstraint::destroy(s, b);
+		if (s && b) {
+			for (Var v = 1; s->validVar(v); ++v) {
+				s->removeWatch(posLit(v), this);
+				s->removeWatch(negLit(v), this);
+			}
+			for (uint32 i = 1; i <= s->decisionLevel(); ++i) {
+				s->removeUndoWatch(i, this);
+			}
+		}
+		Constraint::destroy(s, b);
 	}
 	bool locked(const Solver&) const { return false; }
 	uint32 isOpen(const Solver&, const TypeSet&, LitVec&) { return 0; }
@@ -89,7 +99,6 @@ class SolverTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testSolverOwnsConstraints);
 	CPPUNIT_TEST(testAddVar);
 	CPPUNIT_TEST(testEliminateVar);
-	CPPUNIT_TEST(testResurrectVar);
 	CPPUNIT_TEST(testCmpScores);
 	
 	CPPUNIT_TEST(testValueSet);
@@ -108,6 +117,7 @@ class SolverTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testWatchOrder);
 	CPPUNIT_TEST(testUndoUntil);
 	CPPUNIT_TEST(testUndoWatches);
+	CPPUNIT_TEST(testLazyRemoveWatches);
 	CPPUNIT_TEST(testPropBinary);
 	CPPUNIT_TEST(testPropTernary);
 	CPPUNIT_TEST(testRestartAfterUnitLitResolvedBug);
@@ -146,7 +156,9 @@ class SolverTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testSearchAddsLearntFacts);
 	CPPUNIT_TEST(testSearchMaxConflicts);
 
-	CPPUNIT_TEST(testStats);
+	CPPUNIT_TEST(testProblemStats);
+	CPPUNIT_TEST(testSolverStats);
+	CPPUNIT_TEST(testClaspStats);
 #if WITH_THREADS
 	CPPUNIT_TEST(testLearntShort);
 	CPPUNIT_TEST(testLearntShortAreDistributed);
@@ -171,11 +183,18 @@ class SolverTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testPushAux);
 	CPPUNIT_TEST(testPushAuxFact);
 	CPPUNIT_TEST(testPopAuxRemovesConstraints);
+	CPPUNIT_TEST(testPopAuxRemovesConstraintsRegression);
 	CPPUNIT_TEST(testPopAuxMaintainsQueue);
 	CPPUNIT_TEST(testIncrementalAux);
 
 	CPPUNIT_TEST(testUnfreezeStepBug);
 	CPPUNIT_TEST(testRemoveConstraint);
+
+	CPPUNIT_TEST(testPopVars);
+	CPPUNIT_TEST(testPopVarsAfterCommit);
+	CPPUNIT_TEST(testPopVarsIncremental);
+	CPPUNIT_TEST(testPopVarsIncrementalBug);
+	CPPUNIT_TEST(testPopVarsMT);
 	CPPUNIT_TEST_SUITE_END(); 
 public:
 	void setUp() {
@@ -184,8 +203,7 @@ public:
 	void testReasonStore() {
 		ST store;
 		store.resize(1);
-		store.dataResize(1);
-		Constraint* x = new TestingConstraint(0, Constraint_t::learnt_conflict);
+		Constraint* x = new TestingConstraint(0, Constraint_t::Conflict);
 		store[0] = x;
 		store.setData(0, 22);
 		CPPUNIT_ASSERT(store[0]      == x);
@@ -260,10 +278,10 @@ public:
 		CPPUNIT_ASSERT_EQUAL(0u, s.decisionLevel());
 		CPPUNIT_ASSERT_EQUAL(0u, s.queueSize());
 		ctx.setFrozen(0, true);
-		CPPUNIT_ASSERT(ctx.stats().vars_frozen == 0);
+		CPPUNIT_ASSERT(ctx.stats().vars.frozen == 0);
 	}
 	void testVarNullIsSentinel() {
-		Literal p = posLit(0);
+		Literal p = lit_true();
 		CPPUNIT_ASSERT_EQUAL(true, isSentinel(p));
 		CPPUNIT_ASSERT_EQUAL(true, isSentinel(~p));
 	}
@@ -282,7 +300,7 @@ public:
 			Solver& s = ctx.startAddConstraints();
 			ctx.add( new TestingConstraint(&conDel) );
 			ctx.endInit();
-			s.addLearnt( new TestingConstraint(&lconDel, Constraint_t::learnt_conflict), TestingConstraint::size());
+			s.addLearnt( new TestingConstraint(&lconDel, Constraint_t::Conflict), TestingConstraint::size());
 			CPPUNIT_ASSERT_EQUAL(1u, s.numConstraints());
 			CPPUNIT_ASSERT_EQUAL(1u, s.numLearntConstraints());
 		}
@@ -291,23 +309,23 @@ public:
 	}
 
 	void testAddVar() {
-		Var v1 = ctx.addVar(Var_t::atom_var);
-		Var v2 = ctx.addVar(Var_t::body_var);
+		Var v1 = ctx.addVar(Var_t::Atom);
+		Var v2 = ctx.addVar(Var_t::Body);
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		CPPUNIT_ASSERT_EQUAL(2u, s.numVars());
 		CPPUNIT_ASSERT_EQUAL(0u, s.numAssignedVars());
 		CPPUNIT_ASSERT_EQUAL(2u, s.numFreeVars());
-		CPPUNIT_ASSERT_EQUAL(Var_t::atom_var, ctx.varInfo(v1).type());
-		CPPUNIT_ASSERT_EQUAL(Var_t::body_var, ctx.varInfo(v2).type());
+		CPPUNIT_ASSERT_EQUAL(Var_t::Atom, ctx.varInfo(v1).type());
+		CPPUNIT_ASSERT_EQUAL(Var_t::Body, ctx.varInfo(v2).type());
 
 		CPPUNIT_ASSERT_EQUAL( true, ctx.varInfo(v1).preferredSign() );   
 		CPPUNIT_ASSERT_EQUAL( false, ctx.varInfo(v2).preferredSign() );
 	}
 
 	void testEliminateVar() {
-		Var v1 = ctx.addVar(Var_t::atom_var);
-		ctx.addVar(Var_t::body_var);
+		Var v1 = ctx.addVar(Var_t::Atom);
+		ctx.addVar(Var_t::Body);
 		Solver& s = ctx.startAddConstraints();
 		ctx.eliminate(v1);
 		CPPUNIT_ASSERT_EQUAL(uint32(2), s.numVars());
@@ -323,42 +341,30 @@ public:
 		CPPUNIT_ASSERT_EQUAL(uint32(1), ctx.numEliminatedVars());
 		ctx.endInit();
 	}
-	void testResurrectVar() {
-		/*
-		Var v1 = ctx.addVar(Var_t::atom_var);
-		Var v2 = ctx.addVar(Var_t::body_var);
-		struct Dummy : public SelectFirst {
-			Dummy() : res(0) {}
-			void resurrect(const Solver&, Var v) { res = v; }
-
-			Var res;
-		}*h = new Dummy();
-		s.strategy.heuristic.reset(h);
-		// noop if v2 is not eliminated
-		s.eliminate(v2, false);
-		CPPUNIT_ASSERT_EQUAL(Var(0), h->res);
-		
-		s.eliminate(v2, true);
-		CPPUNIT_ASSERT_EQUAL(1u, s.numEliminatedVars());
-		CPPUNIT_ASSERT_EQUAL(1u, s.numFreeVars());
-		
-		s.eliminate(v2, false);
-		CPPUNIT_ASSERT_EQUAL(v2, h->res);
-		CPPUNIT_ASSERT_EQUAL(0u, s.numEliminatedVars());
-		CPPUNIT_ASSERT_EQUAL(2u, s.numFreeVars());
-		*/
-#if defined(CLASP_ENABLE_PRAGMA_TODO)
-		CPPUNIT_FAIL("TODO - Resurrection of vars not yet supported\n");
-#endif
-	}
-
+	
 	void testCmpScores() {
 		ReduceStrategy rs;
-		Activity a1(100, 5);
-		Activity a2(90, 3);
+		ConstraintScore a1 = makeScore(100, 5), a2 = makeScore(90, 3);
 		CPPUNIT_ASSERT(rs.compare(ReduceStrategy::score_act, a1, a2) > 0);
 		CPPUNIT_ASSERT(rs.compare(ReduceStrategy::score_lbd, a1, a2) < 0);
 		CPPUNIT_ASSERT(rs.compare(ReduceStrategy::score_both, a1, a2) > 0);
+
+		CPPUNIT_ASSERT(!a1.bumped() && !a2.bumped());
+		a1.bumpLbd(4);
+		CPPUNIT_ASSERT(rs.compare(ReduceStrategy::score_act, a1, a2) > 0);
+		CPPUNIT_ASSERT(rs.compare(ReduceStrategy::score_lbd, a1, a2) < 0);
+		CPPUNIT_ASSERT(rs.compare(ReduceStrategy::score_both, a1, a2) > 0);
+		CPPUNIT_ASSERT(a1.bumped() && a1.activity() == 100 && a1.lbd() == 4);
+		a1.clearBumped();
+		CPPUNIT_ASSERT(!a1.bumped() && a1.activity() == 100 && a1.lbd() == 4);
+
+		a1.bumpActivity();
+		CPPUNIT_ASSERT(!a1.bumped() && a1.activity() == 101 && a1.lbd() == 4);
+		a1.reset(Clasp::ACT_MAX - 1, 2);
+		a1.bumpActivity();
+		CPPUNIT_ASSERT(!a1.bumped() && a1.activity() == Clasp::ACT_MAX && a1.lbd() == 2);
+		a1.bumpActivity();
+		CPPUNIT_ASSERT(!a1.bumped() && a1.activity() == Clasp::ACT_MAX && a1.lbd() == 2);
 	}
 	
 	void testValueSet() {
@@ -381,27 +387,19 @@ public:
 		CPPUNIT_ASSERT_EQUAL(vs.sign(), true);
 	}
 	void testPreferredLitByType() {
-		Var v1 = ctx.addVar(Var_t::atom_var);
-		Var v2 = ctx.addVar(Var_t::body_var);
-		Var v3 = ctx.addVar(Var_t::atom_var, true);
-		Var v4 = ctx.addVar(Var_t::body_var, true);
+		Var v1 = ctx.addVar(Var_t::Atom);
+		Var v2 = ctx.addVar(Var_t::Body);
+		Var v3 = ctx.addVar(Var_t::Hybrid);
+		Var v4 = ctx.addVar(Var_t::Body, VarInfo::Eq);
 		CPPUNIT_ASSERT_EQUAL( true, ctx.varInfo(v1).preferredSign() );
 		CPPUNIT_ASSERT_EQUAL( false, ctx.varInfo(v2).preferredSign() );
 		CPPUNIT_ASSERT_EQUAL( true, ctx.varInfo(v3).preferredSign() );   
 		CPPUNIT_ASSERT_EQUAL( false, ctx.varInfo(v4).preferredSign() );
-		BasicSatConfig config;
-		config.addSolver(0).signDef = SolverStrategies::sign_disj;
-		ctx.setConfiguration(&config, false);
-		Solver& s = ctx.startAddConstraints();
-		CPPUNIT_ASSERT_EQUAL( negLit(v1), DecisionHeuristic::selectLiteral(s, v1, 0) );
-		CPPUNIT_ASSERT_EQUAL( posLit(v2), DecisionHeuristic::selectLiteral(s, v2, 0) );
-		ctx.setInDisj(v1, true);
-		CPPUNIT_ASSERT_EQUAL( posLit(v1), DecisionHeuristic::selectLiteral(s, v1, 0) );
 	}
 
 	void testInitSavedValue() {
-		Var v1 = ctx.addVar(Var_t::atom_var);
-		Var v2 = ctx.addVar(Var_t::body_var);
+		Var v1 = ctx.addVar(Var_t::Atom);
+		Var v2 = ctx.addVar(Var_t::Body);
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		CPPUNIT_ASSERT_EQUAL( value_free, s.pref(v1).get(ValueSet::saved_value) ); 
@@ -415,37 +413,37 @@ public:
 	}
 
 	void testReset() {
-		ctx.addVar(Var_t::atom_var); ctx.addVar(Var_t::body_var);
+		ctx.addVar(Var_t::Atom); ctx.addVar(Var_t::Body);
 		Solver& s = ctx.startAddConstraints();
 		s.add( new TestingConstraint(0) );
 		ctx.endInit();
-		s.addLearnt( new TestingConstraint(0, Constraint_t::learnt_conflict), TestingConstraint::size());
+		s.addLearnt( new TestingConstraint(0, Constraint_t::Conflict), TestingConstraint::size());
 		s.assume( posLit(1) );
 		ctx.reset();
 		testDefaults();
-		Var n = ctx.addVar(Var_t::body_var);
+		Var n = ctx.addVar(Var_t::Body);
 		ctx.startAddConstraints();
 		ctx.endInit();
-		CPPUNIT_ASSERT_EQUAL(Var_t::body_var, ctx.varInfo(n).type());
+		CPPUNIT_ASSERT_EQUAL(Var_t::Body, ctx.varInfo(n).type());
 	}
 
 	void testForce() {
-		Var v1 = ctx.addVar(Var_t::atom_var);
-		Var v2 = ctx.addVar(Var_t::atom_var);
+		Var v1 = ctx.addVar(Var_t::Atom);
+		Var v2 = ctx.addVar(Var_t::Atom);
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		CPPUNIT_ASSERT_EQUAL(true, s.force(posLit(v1), 0));
 		CPPUNIT_ASSERT_EQUAL(true, s.force(negLit(v2), posLit(v1)));
 		CPPUNIT_ASSERT_EQUAL(true, s.isTrue(posLit(v1)));
 		CPPUNIT_ASSERT_EQUAL(true, s.isTrue(negLit(v2)));
-		CPPUNIT_ASSERT(s.reason(negLit(v2)).type() == Antecedent::binary_constraint);
+		CPPUNIT_ASSERT(s.reason(negLit(v2)).type() == Antecedent::Binary);
 
 		CPPUNIT_ASSERT_EQUAL(2u, s.queueSize());
 	}
 
 	void testNoUpdateOnConsistentAssign() {
-		Var v1 = ctx.addVar(Var_t::atom_var);
-		Var v2 = ctx.addVar(Var_t::atom_var);
+		Var v1 = ctx.addVar(Var_t::Atom);
+		Var v2 = ctx.addVar(Var_t::Atom);
 		Solver& s = ctx.startAddConstraints();
 		s.force( posLit(v2), 0 );
 		s.force( posLit(v1), 0 );
@@ -456,7 +454,7 @@ public:
 	}
 
 	void testAssume() {
-		Literal p = posLit(ctx.addVar(Var_t::atom_var));
+		Literal p = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		CPPUNIT_ASSERT_EQUAL(true, s.assume(p));
 		CPPUNIT_ASSERT_EQUAL(value_true, s.value(p.var()));
@@ -465,9 +463,9 @@ public:
 	}
 
 	void testGetDecision() {
-		Literal p = posLit(ctx.addVar(Var_t::atom_var));
-		Literal q = posLit(ctx.addVar(Var_t::atom_var));
-		Literal r = posLit(ctx.addVar(Var_t::atom_var));
+		Literal p = posLit(ctx.addVar(Var_t::Atom));
+		Literal q = posLit(ctx.addVar(Var_t::Atom));
+		Literal r = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		s.assume(p);
 		s.assume(q);
@@ -478,7 +476,7 @@ public:
 		CPPUNIT_ASSERT_EQUAL(~r, s.decision(s.decisionLevel()));
 	}
 	void testAddWatch() {
-		Literal p = posLit(ctx.addVar(Var_t::atom_var));
+		Literal p = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		TestingConstraint c;
 		CPPUNIT_ASSERT_EQUAL(false, s.hasWatch(p, &c));
@@ -488,7 +486,7 @@ public:
 	}
 
 	void testRemoveWatch() {
-		Literal p = posLit(ctx.addVar(Var_t::atom_var));
+		Literal p = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		TestingConstraint c;
 		s.addWatch(p, &c);
@@ -497,7 +495,7 @@ public:
 	}
 
 	void testNotifyWatch() {
-		Literal p = posLit(ctx.addVar(Var_t::atom_var)), q = posLit(ctx.addVar(Var_t::atom_var));
+		Literal p = posLit(ctx.addVar(Var_t::Atom)), q = posLit(ctx.addVar(Var_t::Atom));
 		TestingConstraint c;
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
@@ -512,7 +510,7 @@ public:
 	}
 
 	void testKeepWatchOnPropagate() {
-		Literal p = posLit(ctx.addVar(Var_t::atom_var));
+		Literal p = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		TestingConstraint c;
@@ -523,7 +521,7 @@ public:
 	}
 
 	void testRemoveWatchOnPropagate() {
-		Literal p = posLit(ctx.addVar(Var_t::atom_var));
+		Literal p = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		TestingConstraint c;
@@ -535,7 +533,7 @@ public:
 	}
 
 	void testWatchOrder() {
-		Literal p = posLit(ctx.addVar(Var_t::atom_var));
+		Literal p = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		TestingConstraint c1, c2, c3;
@@ -555,8 +553,8 @@ public:
 	}
 
 	void testUndoUntil() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var)), b = posLit(ctx.addVar(Var_t::atom_var))
-			, c = posLit(ctx.addVar(Var_t::atom_var)), d = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom)), b = posLit(ctx.addVar(Var_t::Atom))
+			, c = posLit(ctx.addVar(Var_t::Atom)), d = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		s.assume(a);
 		s.force(~b, a);
@@ -572,7 +570,7 @@ public:
 	}
 
 	void testUndoWatches() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var)), b = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom)), b = posLit(ctx.addVar(Var_t::Atom));
 		TestingConstraint c;
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
@@ -584,6 +582,24 @@ public:
 		s.undoUntil(0);
 		CPPUNIT_ASSERT_EQUAL(1, c.undos);
 	}
+	void testLazyRemoveWatches() {
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Solver& s = ctx.startAddConstraints();
+		uint32  x = s.numWatches(a);
+		Solver::ConstraintDB db;
+		for (uint32 i = 0; i != 10; ++i) {
+			db.push_back(new TestingConstraint);
+			s.addWatch(a, db[i]);
+		}
+		ctx.endInit();
+		s.assume(a);
+		for (uint32 i = 0; i != 10; ++i) {
+			s.addUndoWatch(1, db[i]);
+		}
+		s.destroyDB(db);
+		s.undoUntil(0);
+		CPPUNIT_ASSERT(s.numWatches(a) == x);
+	}
 
 	void testPropBinary() {
 		LitVec bin = addBinary();
@@ -593,7 +609,7 @@ public:
 			CPPUNIT_ASSERT(s.propagate());
 			int o = (i+1)%2;
 			CPPUNIT_ASSERT_EQUAL(true, s.isTrue(bin[o]));
-			CPPUNIT_ASSERT_EQUAL(Antecedent::binary_constraint, s.reason(bin[o]).type());
+			CPPUNIT_ASSERT_EQUAL(Antecedent::Binary, s.reason(bin[o]).type());
 			LitVec r;
 			s.reason(bin[o], r);
 			CPPUNIT_ASSERT_EQUAL(1u, (uint32)r.size());
@@ -618,7 +634,7 @@ public:
 			CPPUNIT_ASSERT(s.propagate());
 			int o = (i+2)%3;
 			CPPUNIT_ASSERT_EQUAL(true, s.isTrue(tern[o]));
-			CPPUNIT_ASSERT_EQUAL(Antecedent::ternary_constraint, s.reason(tern[o]).type());
+			CPPUNIT_ASSERT_EQUAL(Antecedent::Ternary, s.reason(tern[o]).type());
 			LitVec r;
 			s.reason(tern[o], r);
 			CPPUNIT_ASSERT_EQUAL(2u, (uint32)r.size());
@@ -648,11 +664,11 @@ public:
 	}
 
 	void testEstimateBCP() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal c = posLit(ctx.addVar(Var_t::atom_var));
-		Literal d = posLit(ctx.addVar(Var_t::atom_var));
-		Literal e = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal c = posLit(ctx.addVar(Var_t::Atom));
+		Literal d = posLit(ctx.addVar(Var_t::Atom));
+		Literal e = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(a, b);
 		ctx.addBinary(~b, c);
@@ -666,9 +682,9 @@ public:
 	}
 
 	void testEstimateBCPLoop() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal c = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal c = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(a, b);
 		ctx.addBinary(~b, c);
@@ -678,13 +694,13 @@ public:
 	}
 
 	void testAssertImmediate() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal d = posLit(ctx.addVar(Var_t::atom_var));
-		Literal q = posLit(ctx.addVar(Var_t::atom_var));
-		Literal f = posLit(ctx.addVar(Var_t::atom_var));
-		Literal x = posLit(ctx.addVar(Var_t::atom_var));
-		Literal z = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal d = posLit(ctx.addVar(Var_t::Atom));
+		Literal q = posLit(ctx.addVar(Var_t::Atom));
+		Literal f = posLit(ctx.addVar(Var_t::Atom));
+		Literal x = posLit(ctx.addVar(Var_t::Atom));
+		Literal z = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		
 		ClauseCreator cl(&s);
@@ -708,23 +724,23 @@ public:
 		Antecedent whyF = s.reason(f);
 		Antecedent whyX = s.reason(x);
 
-		CPPUNIT_ASSERT(whyB.type() == Antecedent::binary_constraint && whyB.firstLiteral() == ~a);
-		CPPUNIT_ASSERT(whyZ.type() == Antecedent::ternary_constraint && whyZ.firstLiteral() == ~a && whyZ.secondLiteral() == b);
-		CPPUNIT_ASSERT(whyD.type() == Antecedent::generic_constraint);
-		CPPUNIT_ASSERT(whyQ.type() == Antecedent::generic_constraint);
+		CPPUNIT_ASSERT(whyB.type() == Antecedent::Binary && whyB.firstLiteral() == ~a);
+		CPPUNIT_ASSERT(whyZ.type() == Antecedent::Ternary && whyZ.firstLiteral() == ~a && whyZ.secondLiteral() == b);
+		CPPUNIT_ASSERT(whyD.type() == Antecedent::Generic);
+		CPPUNIT_ASSERT(whyQ.type() == Antecedent::Generic);
 		
-		CPPUNIT_ASSERT(whyF.type() == Antecedent::binary_constraint && whyF.firstLiteral() == q);
-		CPPUNIT_ASSERT(whyX.type() == Antecedent::ternary_constraint && whyX.firstLiteral() == f && whyX.secondLiteral() == z);
+		CPPUNIT_ASSERT(whyF.type() == Antecedent::Binary && whyF.firstLiteral() == q);
+		CPPUNIT_ASSERT(whyX.type() == Antecedent::Ternary && whyX.firstLiteral() == f && whyX.secondLiteral() == z);
 	}
 
 	void testPreferShortBfs() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal p = posLit(ctx.addVar(Var_t::atom_var));
-		Literal q = posLit(ctx.addVar(Var_t::atom_var));
-		Literal x = posLit(ctx.addVar(Var_t::atom_var));
-		Literal y = posLit(ctx.addVar(Var_t::atom_var));
-		Literal z = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal p = posLit(ctx.addVar(Var_t::Atom));
+		Literal q = posLit(ctx.addVar(Var_t::Atom));
+		Literal x = posLit(ctx.addVar(Var_t::Atom));
+		Literal y = posLit(ctx.addVar(Var_t::Atom));
+		Literal z = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ClauseCreator cl(&s);
 		cl.addDefaultFlags(ClauseCreator::clause_watch_least);
@@ -751,10 +767,10 @@ public:
 
 		CPPUNIT_ASSERT_EQUAL( 7u, s.numAssignedVars());
 
-		CPPUNIT_ASSERT( s.reason(b).type() == Antecedent::binary_constraint );
-		CPPUNIT_ASSERT( s.reason(p).type() == Antecedent::binary_constraint );
-		CPPUNIT_ASSERT( s.reason(z).type() == Antecedent::ternary_constraint );
-		CPPUNIT_ASSERT( s.reason(q).type() == Antecedent::generic_constraint );
+		CPPUNIT_ASSERT( s.reason(b).type() == Antecedent::Binary );
+		CPPUNIT_ASSERT( s.reason(p).type() == Antecedent::Binary );
+		CPPUNIT_ASSERT( s.reason(z).type() == Antecedent::Ternary );
+		CPPUNIT_ASSERT( s.reason(q).type() == Antecedent::Generic );
 	}
 	void testPostPropInit() {
 		TestingPostProp* p = new TestingPostProp(false);
@@ -816,16 +832,16 @@ public:
 		CPPUNIT_ASSERT(s.getPost(20));
 		CPPUNIT_ASSERT(p2->next == p3);
 		s.addPost(p4);
-		CPPUNIT_ASSERT(p2->next == p4);
-		CPPUNIT_ASSERT(p4->next == p3);
+		CPPUNIT_ASSERT(p2->next == p3);
+		CPPUNIT_ASSERT(p3->next == p4);
 		ctx.endInit();
 		CPPUNIT_ASSERT(p3->inits == 1);
 		p3->props = 0;
 		p2->props = 0;
 		p4->props = 0;
 		s.removePost(p2);
-		s.removePost(p4);
-		s.addPost(p4);
+		s.removePost(p3);
+		s.addPost(p3);
 		s.propagate();
 		CPPUNIT_ASSERT(p3->props == 1 && p4->props == 1);
 		s.addPost(p1);
@@ -836,8 +852,8 @@ public:
 		s.removePost(p4);
 		s.propagate();
 		CPPUNIT_ASSERT(p3->props == 1 && p4->props == 1 && p1->props == 1 && p2->props == 1);
-		s.addPost(p4);
 		s.addPost(p3);
+		s.addPost(p4);
 		p3->conflict = true;
 		s.propagate();
 		CPPUNIT_ASSERT(p3->props == 2 && p1->props == 2 && p2->props == 2 && p4->props == 1);
@@ -900,10 +916,10 @@ public:
 	}
 
 	void testSimplifyRemovesSatBinClauses() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal c = posLit(ctx.addVar(Var_t::atom_var));
-		Literal d = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal c = posLit(ctx.addVar(Var_t::Atom));
+		Literal d = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(a, b);
 		ctx.addBinary(a, c);
@@ -914,10 +930,10 @@ public:
 	}
 
 	void testSimplifyRemovesSatTernClauses() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal c = posLit(ctx.addVar(Var_t::atom_var));
-		Literal d = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal c = posLit(ctx.addVar(Var_t::Atom));
+		Literal d = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.addTernary(a, b, d);
 		ctx.addTernary(~a, b, c);
@@ -934,7 +950,7 @@ public:
 	}
 	
 	void testSimplifyRemovesSatConstraints() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		TestingConstraint* t1;
 		TestingConstraint* t2;
@@ -944,8 +960,8 @@ public:
 		s.add( t1 = new TestingConstraint );
 		s.add( t2 = new TestingConstraint(&t2Del) );
 		ctx.endInit();
-		s.addLearnt( t3 = new TestingConstraint(&t3Del, Constraint_t::learnt_conflict), TestingConstraint::size() );
-		s.addLearnt( t4 = new TestingConstraint(0, Constraint_t::learnt_conflict), TestingConstraint::size() );
+		s.addLearnt( t3 = new TestingConstraint(&t3Del, Constraint_t::Conflict), TestingConstraint::size() );
+		s.addLearnt( t4 = new TestingConstraint(0, Constraint_t::Conflict), TestingConstraint::size() );
 		t1->sat = false;
 		t2->sat = true;
 		t3->sat = true;
@@ -961,35 +977,35 @@ public:
 	}
 
 	void testRemoveConditional() {
-		Var a = ctx.addVar( Var_t::atom_var );
-		Var b = ctx.addVar( Var_t::atom_var );
-		Var c = ctx.addVar( Var_t::atom_var );
+		Var a = ctx.addVar( Var_t::Atom );
+		Var b = ctx.addVar( Var_t::Atom );
+		Var c = ctx.addVar( Var_t::Atom );
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		Literal tag = posLit(s.pushTagVar(false));
 		ClauseCreator cc(&s);
-		cc.start(Constraint_t::learnt_conflict).add(posLit(a)).add(posLit(b)).add(posLit(c)).add(~tag).end();
+		cc.start(Constraint_t::Conflict).add(posLit(a)).add(posLit(b)).add(posLit(c)).add(~tag).end();
 		CPPUNIT_ASSERT(s.numLearntConstraints() == 1);
 		s.removeConditional();
 		CPPUNIT_ASSERT(s.numLearntConstraints() == 0);
 	}
 
 	void testStrengthenConditional() {
-		Var a = ctx.addVar( Var_t::atom_var );
-		Var b = ctx.addVar( Var_t::atom_var );
-		Var c = ctx.addVar( Var_t::atom_var );
+		Var a = ctx.addVar( Var_t::Atom );
+		Var b = ctx.addVar( Var_t::Atom );
+		Var c = ctx.addVar( Var_t::Atom );
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		ClauseCreator cc(&s);
 		Literal tag = posLit(s.pushTagVar(false));
-		cc.start(Constraint_t::learnt_conflict).add(posLit(a)).add(posLit(b)).add(posLit(c)).add(~tag).end();
+		cc.start(Constraint_t::Conflict).add(posLit(a)).add(posLit(b)).add(posLit(c)).add(~tag).end();
 		CPPUNIT_ASSERT(s.numLearntConstraints() == 1);
 		s.strengthenConditional();
 		CPPUNIT_ASSERT(ctx.numLearntShort() == 1 || ctx.numTernary() == 1);
 	}
 
 	void testLearnConditional() {
-		Var b = ctx.addVar( Var_t::atom_var );
+		Var b = ctx.addVar( Var_t::Atom );
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		Literal tag = posLit(s.pushTagVar(true));
@@ -998,7 +1014,7 @@ public:
 		TestingConstraint* cfl = new TestingConstraint;
 		cfl->ante.push_back(tag);
 		cfl->ante.push_back(posLit(b));
-		s.force(negLit(0), cfl);
+		s.force(lit_false(), cfl);
 		cfl->destroy(&s, true);
 		s.resolveConflict();
 		CPPUNIT_ASSERT(ctx.numLearntShort() == 0 && ctx.numBinary() == 0);
@@ -1010,9 +1026,9 @@ public:
 
 	void testResolveUnary() {
 		ctx.enableStats(1);
-		Var a = ctx.addVar( Var_t::atom_var );
-		Var b = ctx.addVar( Var_t::atom_var );
-		Var c = ctx.addVar( Var_t::atom_var );
+		Var a = ctx.addVar( Var_t::Atom );
+		Var b = ctx.addVar( Var_t::Atom );
+		Var c = ctx.addVar( Var_t::Atom );
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(posLit(a), posLit(b));
 		ctx.addBinary(negLit(b), posLit(c));
@@ -1023,19 +1039,19 @@ public:
 		CPPUNIT_ASSERT_EQUAL(false, s.hasConflict());
 		CPPUNIT_ASSERT_EQUAL(true, s.isTrue(posLit(c)));
 		CPPUNIT_ASSERT_EQUAL(0u, s.decisionLevel());
-		CPPUNIT_ASSERT(s.stats.extra->learnts[Constraint_t::learnt_conflict-1] == 1);
+		CPPUNIT_ASSERT(s.stats.extra->learnts[Constraint_t::Conflict-1] == 1);
 	}
 
 	void testResolveConflict() {
-		Literal x1 = posLit(ctx.addVar( Var_t::atom_var )); Literal x2 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x3 = posLit(ctx.addVar( Var_t::atom_var )); Literal x4 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x5 = posLit(ctx.addVar( Var_t::atom_var )); Literal x6 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x7 = posLit(ctx.addVar( Var_t::atom_var )); Literal x8 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x9 = posLit(ctx.addVar( Var_t::atom_var )); Literal x10 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x11 = posLit(ctx.addVar( Var_t::atom_var )); Literal x12 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x13 = posLit(ctx.addVar( Var_t::atom_var )); Literal x14 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x15 = posLit(ctx.addVar( Var_t::atom_var )); Literal x16 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x17 = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal x1 = posLit(ctx.addVar( Var_t::Atom )); Literal x2 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x3 = posLit(ctx.addVar( Var_t::Atom )); Literal x4 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x5 = posLit(ctx.addVar( Var_t::Atom )); Literal x6 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x7 = posLit(ctx.addVar( Var_t::Atom )); Literal x8 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x9 = posLit(ctx.addVar( Var_t::Atom )); Literal x10 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x11 = posLit(ctx.addVar( Var_t::Atom )); Literal x12 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x13 = posLit(ctx.addVar( Var_t::Atom )); Literal x14 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x15 = posLit(ctx.addVar( Var_t::Atom )); Literal x16 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x17 = posLit(ctx.addVar( Var_t::Atom ));
 		Solver& s   = ctx.startAddConstraints();
 		ClauseCreator cl(&s);
 		cl.start().add(~x11).add(x12).end();
@@ -1064,7 +1080,7 @@ public:
 		CPPUNIT_ASSERT_EQUAL(true, s.resolveConflict());
 		CPPUNIT_ASSERT_EQUAL(s.trail().back(), x15); // UIP
 		CPPUNIT_ASSERT_EQUAL(5u, s.decisionLevel());
-		CPPUNIT_ASSERT_EQUAL(Antecedent::generic_constraint, s.reason(s.trail().back()).type());
+		CPPUNIT_ASSERT_EQUAL(Antecedent::Generic, s.reason(s.trail().back()).type());
 		
 		LitVec cflClause;
 		s.reason(s.trail().back(), cflClause);
@@ -1077,15 +1093,15 @@ public:
 	}
 
 	void testResolveConflictBounded() {
-		Literal x1 = posLit(ctx.addVar( Var_t::atom_var )); Literal x2 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x3 = posLit(ctx.addVar( Var_t::atom_var )); Literal x4 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x5 = posLit(ctx.addVar( Var_t::atom_var )); Literal x6 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x7 = posLit(ctx.addVar( Var_t::atom_var )); Literal x8 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x9 = posLit(ctx.addVar( Var_t::atom_var )); Literal x10 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x11 = posLit(ctx.addVar( Var_t::atom_var )); Literal x12 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x13 = posLit(ctx.addVar( Var_t::atom_var )); Literal x14 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x15 = posLit(ctx.addVar( Var_t::atom_var )); Literal x16 = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal x17 = posLit(ctx.addVar( Var_t::atom_var )); Literal x18 = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal x1 = posLit(ctx.addVar( Var_t::Atom )); Literal x2 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x3 = posLit(ctx.addVar( Var_t::Atom )); Literal x4 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x5 = posLit(ctx.addVar( Var_t::Atom )); Literal x6 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x7 = posLit(ctx.addVar( Var_t::Atom )); Literal x8 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x9 = posLit(ctx.addVar( Var_t::Atom )); Literal x10 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x11 = posLit(ctx.addVar( Var_t::Atom )); Literal x12 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x13 = posLit(ctx.addVar( Var_t::Atom )); Literal x14 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x15 = posLit(ctx.addVar( Var_t::Atom )); Literal x16 = posLit(ctx.addVar( Var_t::Atom ));
+		Literal x17 = posLit(ctx.addVar( Var_t::Atom )); Literal x18 = posLit(ctx.addVar( Var_t::Atom ));
 		Solver& s = ctx.startAddConstraints();
 		ClauseCreator cl(&s);
 		cl.start().add(~x11).add(x12).end();
@@ -1119,7 +1135,7 @@ public:
 		CPPUNIT_ASSERT_EQUAL(s.trail().back(), x15); // UIP
 		CPPUNIT_ASSERT_EQUAL(6u, s.decisionLevel());  // Jump was bounded!
 		Antecedent ante = s.reason(s.trail().back());
-		CPPUNIT_ASSERT_EQUAL(Antecedent::generic_constraint, ante.type());
+		CPPUNIT_ASSERT_EQUAL(Antecedent::Generic, ante.type());
 		ClauseHead* cflClause = (ClauseHead*)ante.constraint();
 		LitVec r;
 		cflClause->reason(s, s.trail().back(), r);
@@ -1136,10 +1152,10 @@ public:
 	}
 	
 	void testSearchKeepsAssumptions() {
-		Var a = ctx.addVar( Var_t::atom_var );
-		Var b = ctx.addVar( Var_t::atom_var );
-		Var c = ctx.addVar( Var_t::atom_var );
-		Var d = ctx.addVar( Var_t::atom_var );
+		Var a = ctx.addVar( Var_t::Atom );
+		Var b = ctx.addVar( Var_t::Atom );
+		Var c = ctx.addVar( Var_t::Atom );
+		Var d = ctx.addVar( Var_t::Atom );
 		Solver& s = ctx.startAddConstraints();
 		ClauseCreator cl(&s);
 		ctx.addBinary(posLit(a), posLit(b));
@@ -1154,10 +1170,10 @@ public:
 		CPPUNIT_ASSERT_EQUAL(1u, s.decisionLevel());
 	}
 	void testSearchAddsLearntFacts() {
-		Var a = ctx.addVar( Var_t::atom_var );
-		Var b = ctx.addVar( Var_t::atom_var );
-		Var c = ctx.addVar( Var_t::atom_var );
-		Var d = ctx.addVar( Var_t::atom_var );
+		Var a = ctx.addVar( Var_t::Atom );
+		Var b = ctx.addVar( Var_t::Atom );
+		Var c = ctx.addVar( Var_t::Atom );
+		Var d = ctx.addVar( Var_t::Atom );
 		struct Dummy : public DecisionHeuristic {
 			Dummy(Literal first, Literal second) {lit_[0] = first; lit_[1] = second;}
 			void updateVar(const Solver&, Var, uint32) {}
@@ -1170,8 +1186,8 @@ public:
 				return Literal();
 			}
 			Literal lit_[2];
-		}*h = new Dummy(negLit(c),negLit(a));
-		ctx.master()->setHeuristic(h);
+		}h(negLit(c),negLit(a));
+		ctx.master()->setHeuristic(&h, Ownership_t::Retain);
 		Solver& s = ctx.startAddConstraints();
 		ClauseCreator cl(&s);
 		ctx.addBinary(posLit(a), posLit(b));
@@ -1187,10 +1203,10 @@ public:
 	}
 
 	void testSearchMaxConflicts() {
-		Var a = ctx.addVar( Var_t::atom_var );
-		Var b = ctx.addVar( Var_t::atom_var );
-		Var c = ctx.addVar( Var_t::atom_var );
-		ctx.addVar( Var_t::atom_var );
+		Var a = ctx.addVar( Var_t::Atom );
+		Var b = ctx.addVar( Var_t::Atom );
+		Var c = ctx.addVar( Var_t::Atom );
+		ctx.addVar( Var_t::Atom );
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(posLit(a), negLit(b));
 		ctx.addBinary(negLit(a), posLit(b));
@@ -1205,9 +1221,9 @@ public:
 	} 
 
 	void testClearAssumptions() {
-		Var a = ctx.addVar( Var_t::atom_var );
-		Var b = ctx.addVar( Var_t::atom_var );
-		ctx.addVar( Var_t::atom_var );
+		Var a = ctx.addVar( Var_t::Atom );
+		Var b = ctx.addVar( Var_t::Atom );
+		ctx.addVar( Var_t::Atom );
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(negLit(a), negLit(b));
 		ctx.addBinary(negLit(a), posLit(b));
@@ -1224,10 +1240,10 @@ public:
 	}
 
 	void testStopConflict() {
-		Var a = ctx.addVar( Var_t::atom_var );
-		Var b = ctx.addVar( Var_t::atom_var );
-		Var c = ctx.addVar( Var_t::atom_var );
-		Var d = ctx.addVar( Var_t::atom_var );
+		Var a = ctx.addVar( Var_t::Atom );
+		Var b = ctx.addVar( Var_t::Atom );
+		Var c = ctx.addVar( Var_t::Atom );
+		Var d = ctx.addVar( Var_t::Atom );
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(negLit(a), negLit(b));
 		ctx.addBinary(negLit(a), posLit(b));
@@ -1250,10 +1266,10 @@ public:
 	}
 	
 	void testClearStopConflictResetsBtLevel() {
-		Var a = ctx.addVar( Var_t::atom_var );
-		Var b = ctx.addVar( Var_t::atom_var );
-		Var c = ctx.addVar( Var_t::atom_var );
-		Var d = ctx.addVar( Var_t::atom_var );
+		Var a = ctx.addVar( Var_t::Atom );
+		Var b = ctx.addVar( Var_t::Atom );
+		Var c = ctx.addVar( Var_t::Atom );
+		Var d = ctx.addVar( Var_t::Atom );
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(negLit(c), posLit(d));
 		ctx.endInit();
@@ -1272,77 +1288,119 @@ public:
 		CPPUNIT_ASSERT(s.backtrackLevel() == bt);
 	}
 
-	void testStats() {
+	void testProblemStats() {
 		ProblemStats p1, p2;
-		CPPUNIT_ASSERT_EQUAL(uint32(0), p1.vars);
-		CPPUNIT_ASSERT_EQUAL(uint32(0), p2.vars_eliminated);
-		CPPUNIT_ASSERT_EQUAL(uint32(0), p1.constraints);
-		CPPUNIT_ASSERT_EQUAL(uint32(0), p2.constraints_binary);
-		CPPUNIT_ASSERT_EQUAL(uint32(0), p2.constraints_ternary);
+		CPPUNIT_ASSERT_EQUAL(uint32(0), p1.vars.num);
+		CPPUNIT_ASSERT_EQUAL(uint32(0), p2.vars.eliminated);
+		CPPUNIT_ASSERT_EQUAL(uint32(0), p1.constraints.other);
+		CPPUNIT_ASSERT_EQUAL(uint32(0), p2.constraints.binary);
+		CPPUNIT_ASSERT_EQUAL(uint32(0), p2.constraints.ternary);
 
-		p1.vars               = 100; p2.vars               = 150;
-		p1.vars_eliminated    =  20; p2.vars_eliminated    =  30;
-		p1.constraints        = 150; p2.constraints        = 150;
-		p1.constraints_binary =   0; p2.constraints_binary = 100;
-		p1.constraints_ternary= 100; p2.constraints_ternary=   0;
+		p1.vars.num           = 100; p2.vars.num           = 150;
+		p1.vars.eliminated    =  20; p2.vars.eliminated    =  30;
+		p1.constraints.other  = 150; p2.constraints.other  = 150;
+		p1.constraints.binary =   0; p2.constraints.binary = 100;
+		p1.constraints.ternary= 100; p2.constraints.ternary=   0;
 		p1.diff(p2);
 
-		CPPUNIT_ASSERT_EQUAL(uint32(50), p1.vars);
-		CPPUNIT_ASSERT_EQUAL(uint32(10), p1.vars_eliminated);
-		CPPUNIT_ASSERT_EQUAL(uint32(0),  p1.constraints);
-		CPPUNIT_ASSERT_EQUAL(uint32(100),p1.constraints_binary);
-		CPPUNIT_ASSERT_EQUAL(uint32(100),p1.constraints_ternary);
+		CPPUNIT_ASSERT_EQUAL(uint32(50), p1.vars.num);
+		CPPUNIT_ASSERT_EQUAL(uint32(10), p1.vars.eliminated);
+		CPPUNIT_ASSERT_EQUAL(uint32(0),  p1.constraints.other);
+		CPPUNIT_ASSERT_EQUAL(uint32(100),p1.constraints.binary);
+		CPPUNIT_ASSERT_EQUAL(uint32(100),p1.constraints.ternary);
 
+		StatisticObject s = StatisticObject::map(&p1);
+		CPPUNIT_ASSERT(s.size() == p1.size());
+		CPPUNIT_ASSERT(s.at("vars").value() == double(p1.vars.num));
+		CPPUNIT_ASSERT_EQUAL(s.at("constraints").value(), (double)p1.constraints.other);
+		CPPUNIT_ASSERT_EQUAL(s.at("constraints_binary").value(), (double)p1.constraints.binary);
+		CPPUNIT_ASSERT_EQUAL(s.at("constraints_ternary").value(), (double)p1.constraints.ternary);
+	}
+
+	void testSolverStats() {
 		SolverStats st, st2;
 		st.enableExtended();
 		st2.enableExtended();
-		
-		st.conflicts  = 12; st2.conflicts = 3;
-		st.choices    = 100;st2.choices   = 99;	
-		st.restarts   = 7;  st2.restarts  = 8;
-		
-		st.extra->models     = 10; st2.extra->models     = 2;
+
+		st.conflicts = 12; st2.conflicts = 3;
+		st.choices = 100; st2.choices = 99;
+		st.restarts = 7;  st2.restarts = 8;
+
+		st.extra->models = 10; st2.extra->models = 2;
 		st.extra->learnts[0] = 6;  st2.extra->learnts[0] = 4;
 		st.extra->learnts[1] = 5;  st2.extra->learnts[1] = 4;
-		st.extra->lits[0]    = 15; st2.extra->lits[0]    = 14;
-		st.extra->lits[1]    = 5;  st2.extra->lits[1]    = 4;
-		st.extra->binary     = 6;  st2.extra->ternary    = 5;
-		st.extra->deleted    = 10;
-		
+		st.extra->lits[0] = 15; st2.extra->lits[0] = 14;
+		st.extra->lits[1] = 5;  st2.extra->lits[1] = 4;
+		st.extra->binary = 6;  st2.extra->ternary = 5;
+		st.extra->deleted = 10;
+
 		st.accu(st2);
 
 		CPPUNIT_ASSERT_EQUAL(uint64(15), st.conflicts);
-		CPPUNIT_ASSERT_EQUAL(uint64(199),st.choices);
-		CPPUNIT_ASSERT_EQUAL(uint64(15),st.restarts);
+		CPPUNIT_ASSERT_EQUAL(uint64(199), st.choices);
+		CPPUNIT_ASSERT_EQUAL(uint64(15), st.restarts);
 		CPPUNIT_ASSERT_EQUAL(uint64(12), st.extra->models);
-		CPPUNIT_ASSERT_EQUAL(uint64(29),st.extra->lits[0]);
-		CPPUNIT_ASSERT_EQUAL(uint64(9),st.extra->lits[1]);
-		CPPUNIT_ASSERT_EQUAL(uint64(10),st.extra->learnts[0]);
-		CPPUNIT_ASSERT_EQUAL(uint64(9),st.extra->learnts[1]);
-		CPPUNIT_ASSERT_EQUAL(uint32(6),st.extra->binary);
-		CPPUNIT_ASSERT_EQUAL(uint32(5),st.extra->ternary);
-		CPPUNIT_ASSERT_EQUAL(uint64(10),st.extra->deleted);
+		CPPUNIT_ASSERT_EQUAL(uint64(29), st.extra->lits[0]);
+		CPPUNIT_ASSERT_EQUAL(uint64(9), st.extra->lits[1]);
+		CPPUNIT_ASSERT_EQUAL(uint64(10), st.extra->learnts[0]);
+		CPPUNIT_ASSERT_EQUAL(uint64(9), st.extra->learnts[1]);
+		CPPUNIT_ASSERT_EQUAL(uint32(6), st.extra->binary);
+		CPPUNIT_ASSERT_EQUAL(uint32(5), st.extra->ternary);
+		CPPUNIT_ASSERT_EQUAL(uint64(10), st.extra->deleted);
+
+		StatisticObject s = StatisticObject::map(&st);
+		CPPUNIT_ASSERT_EQUAL(double(15) , s.at("conflicts").value());
+		CPPUNIT_ASSERT_EQUAL(double(199), s.at("choices").value());
+		CPPUNIT_ASSERT_EQUAL(double(15) , s.at("restarts").value());
+		StatisticObject e = s.at("extra");
+		CPPUNIT_ASSERT_EQUAL(double(12), e.at("models").value());
+		CPPUNIT_ASSERT_EQUAL(double(29), e.at("lits_conflict").value());
+		CPPUNIT_ASSERT_EQUAL(double(9) , e.at("lemmas_loop").value());
+		CPPUNIT_ASSERT_EQUAL(double(6) , e.at("lemmas_binary").value());
+		CPPUNIT_ASSERT_EQUAL(double(5) , e.at("lemmas_ternary").value());
+		CPPUNIT_ASSERT_EQUAL(double(10), e.at("lemmas_deleted").value());
 	}
+	void testClaspStats() {
+		ClaspStatistics stats;
+		typedef ClaspStatistics::Key_t Key_t;
+		SolverStats st;
+		st.enableExtended();
+		st.choices = 100;
+		st.extra->learnts[1] = 5;
+		st.extra->binary = 6;
+		stats.setRoot(StatisticObject::map(&st));
+		Key_t root = stats.root();
+		CPPUNIT_ASSERT(stats.type(root) == Potassco::Statistics_t::Map);
+		Key_t choices = stats.get(root, "choices");
+		CPPUNIT_ASSERT(stats.type(choices) == Potassco::Statistics_t::Value);
+		CPPUNIT_ASSERT(stats.value(choices) == (double)100);
+		Key_t extra = stats.get(root, "extra");
+		CPPUNIT_ASSERT(stats.type(extra) == Potassco::Statistics_t::Map);
+		Key_t bin = stats.get(extra, "lemmas_binary");
+		CPPUNIT_ASSERT(stats.type(bin) == Potassco::Statistics_t::Value);
+		CPPUNIT_ASSERT(stats.value(bin) == (double)6);
 
-
+		Key_t binByPath = stats.get(root, "extra.lemmas_binary");
+		CPPUNIT_ASSERT(binByPath == bin);
+	}
 	void testLearntShort() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal d = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
+		Literal d = posLit(ctx.addVar( Var_t::Atom ));
 		ctx.setShareMode(ContextParams::share_problem);
 		ctx.setConcurrency(2);
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(c, d);
 		ctx.endInit();
 		ClauseCreator cc(&s);
-		CPPUNIT_ASSERT(cc.start(Constraint_t::learnt_conflict).add(a).add(b).end());
-		CPPUNIT_ASSERT(cc.start(Constraint_t::learnt_conflict).add(~a).add(~b).add(c).end());
+		CPPUNIT_ASSERT(cc.start(Constraint_t::Conflict).add(a).add(b).end());
+		CPPUNIT_ASSERT(cc.start(Constraint_t::Conflict).add(~a).add(~b).add(c).end());
 		CPPUNIT_ASSERT(ctx.numLearntShort() == 2);
 		CPPUNIT_ASSERT(ctx.numBinary()  == 1);
 		CPPUNIT_ASSERT(ctx.numTernary() == 0);
 
-		cc.start(Constraint_t::learnt_conflict).add(a).add(b).add(c).end();
+		cc.start(Constraint_t::Conflict).add(a).add(b).add(c).end();
 		// ignore subsumed/duplicate clauses
 		CPPUNIT_ASSERT(ctx.numLearntShort() == 2);
 
@@ -1362,10 +1420,10 @@ public:
 	}
 	
 	void testLearntShortAreDistributed() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal d = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
+		Literal d = posLit(ctx.addVar( Var_t::Atom ));
 		struct Dummy : public Distributor {		
 			Dummy() : Distributor(Policy(UINT32_MAX, UINT32_MAX, UINT32_MAX)), unary(0), binary(0), ternary(0) {}
 			void publish(const Solver&, SharedLiterals* lits) {
@@ -1394,13 +1452,13 @@ public:
 		ctx.endInit();
 		LitVec lits; lits.resize(2);
 		lits[0] = a; lits[1] = b;
-		ClauseCreator::create(s, lits, 0, ClauseInfo(Constraint_t::learnt_conflict));
+		ClauseCreator::create(s, lits, 0, ConstraintInfo(Constraint_t::Conflict));
 		lits.resize(3);
 		lits[0] = ~a; lits[1] = ~b; lits[2] = ~c;
-		ClauseCreator::create(s, lits, 0, ClauseInfo(Constraint_t::learnt_loop));
+		ClauseCreator::create(s, lits, 0, ConstraintInfo(Constraint_t::Loop));
 		lits.resize(1);
 		lits[0] = d;
-		ClauseCreator::create(s, lits, 0, ClauseInfo(Constraint_t::learnt_conflict));
+		ClauseCreator::create(s, lits, 0, ConstraintInfo(Constraint_t::Conflict));
 		CPPUNIT_ASSERT(dummy->unary  == 1);
 		CPPUNIT_ASSERT(dummy->binary == 1);
 		CPPUNIT_ASSERT(dummy->ternary == 1);
@@ -1412,9 +1470,9 @@ public:
 	}
 
 	void testAuxAreNotDistributed() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
 		struct Dummy : public Distributor {		
 			Dummy() : Distributor(Policy(UINT32_MAX, UINT32_MAX, UINT32_MAX)) {}
 			void publish(const Solver&, SharedLiterals* lits) {
@@ -1431,10 +1489,10 @@ public:
 		
 		LitVec lits; lits.resize(2);
 		lits[0] = a; lits[1] = posLit(aux);
-		ClauseCreator::create(s, lits, 0, ClauseInfo(Constraint_t::learnt_conflict));
+		ClauseCreator::create(s, lits, 0, ConstraintInfo(Constraint_t::Conflict));
 		lits.resize(4);
 		lits[0] = ~a; lits[1] = posLit(aux); lits[2] = b; lits[3] = c;
-		ClauseCreator::create(s, lits, 0, ClauseInfo(Constraint_t::learnt_conflict));
+		ClauseCreator::create(s, lits, 0, ConstraintInfo(Constraint_t::Conflict));
 		CPPUNIT_ASSERT(s.numLearntConstraints() == 2);
 		CPPUNIT_ASSERT(dummy->shared.empty());
 		CPPUNIT_ASSERT(s.getLearnt(0).simplify(s, false) == false);
@@ -1446,7 +1504,7 @@ public:
 		s.clearAssumptions();
 		lits.resize(4);
 		lits[0] = ~a; lits[1] = posLit(aux); lits[2] = ~b; lits[3] = c;
-		ClauseCreator::create(s, lits, 0, ClauseInfo(Constraint_t::learnt_conflict));
+		ClauseCreator::create(s, lits, 0, ConstraintInfo(Constraint_t::Conflict));
 		s.assume(a) && s.propagate();
 		s.assume(negLit(aux)) && s.propagate();
 		s.assume(~c) && s.propagate();
@@ -1458,23 +1516,23 @@ public:
 	}
 
 	void testAttachToDB() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal d = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
+		Literal d = posLit(ctx.addVar( Var_t::Atom ));
 		ctx.setConcurrency(2);
 		Solver& s = ctx.startAddConstraints();
 		ClauseCreator cc(&s);
 		cc.start().add(a).add(b).add(c).add(d).end();
-		Solver& s2 = ctx.addSolver();
+		Solver& s2 = ctx.pushSolver();
 		ctx.endInit();
 		ctx.attach(s2);
 		CPPUNIT_ASSERT(s2.numConstraints() == 1);
 		ctx.unfreeze();
-		Literal e = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal f = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal g = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal h = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal e = posLit(ctx.addVar( Var_t::Atom ));
+		Literal f = posLit(ctx.addVar( Var_t::Atom ));
+		Literal g = posLit(ctx.addVar( Var_t::Atom ));
+		Literal h = posLit(ctx.addVar( Var_t::Atom ));
 		ctx.startAddConstraints();
 		cc.start().add(e).add(f).add(g).add(h).end();
 		cc.start().add(a).end();
@@ -1489,15 +1547,15 @@ public:
 	}
 
 	void testAttachDeferred() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal d = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
+		Literal d = posLit(ctx.addVar( Var_t::Atom ));
 		ctx.setConcurrency(2);
 		Solver& s = ctx.startAddConstraints();
 		ClauseCreator cc(&s);
 		cc.start().add(a).add(b).add(c).add(d).end();
-		Solver& s2= ctx.addSolver();
+		Solver& s2= ctx.pushSolver();
 		ctx.endInit(true);
 		CPPUNIT_ASSERT(s2.numConstraints() == 1);
 		ctx.unfreeze();
@@ -1515,13 +1573,13 @@ public:
 	}
 
 	void testUnfortunateSplitSeq() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal d = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
+		Literal d = posLit(ctx.addVar( Var_t::Atom ));
 		ctx.setConcurrency(2);
 		Solver& s = ctx.startAddConstraints();
-		Solver& s2= ctx.addSolver();
+		Solver& s2= ctx.pushSolver();
 		ctx.endInit(true);
 		
 		s.assume(a)   && s.propagate();
@@ -1558,10 +1616,10 @@ public:
 	}
 
 	void testSplitInc() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal d = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
+		Literal d = posLit(ctx.addVar( Var_t::Atom ));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		s.assume(a) && s.propagate();
@@ -1589,10 +1647,10 @@ public:
 	}
 
 	void testSplitFlipped() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal d = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
+		Literal d = posLit(ctx.addVar( Var_t::Atom ));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		
@@ -1613,10 +1671,10 @@ public:
 	}
 
 	void testSplitFlipToNewRoot() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal d = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
+		Literal d = posLit(ctx.addVar( Var_t::Atom ));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		
@@ -1640,12 +1698,12 @@ public:
 	}
 
 	void testSplitImplied() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal d = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal e = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal f = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
+		Literal d = posLit(ctx.addVar( Var_t::Atom ));
+		Literal e = posLit(ctx.addVar( Var_t::Atom ));
+		Literal f = posLit(ctx.addVar( Var_t::Atom ));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 
@@ -1672,8 +1730,8 @@ public:
 	}
 
 	void testAddShortIncremental() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
 		ctx.setConcurrency(2);
 		ctx.startAddConstraints();
 		ctx.addBinary(a, b);
@@ -1686,17 +1744,17 @@ public:
 	}
 
 	void testSwitchToMtIncremental() {
-		Literal a = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal b = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal c = posLit(ctx.addVar( Var_t::atom_var ));
-		Literal d = posLit(ctx.addVar( Var_t::atom_var ));
+		Literal a = posLit(ctx.addVar( Var_t::Atom ));
+		Literal b = posLit(ctx.addVar( Var_t::Atom ));
+		Literal c = posLit(ctx.addVar( Var_t::Atom ));
+		Literal d = posLit(ctx.addVar( Var_t::Atom ));
 		Solver& s = ctx.startAddConstraints();
 		ClauseCreator cl(&s);
 		cl.start().add(a).add(b).add(c).add(d).end();
 		ctx.endInit(true);
 		CPPUNIT_ASSERT(s.numVars() == 4 && s.numConstraints() == 1);
 		ctx.unfreeze();
-		Solver& s2 = ctx.addSolver();
+		Solver& s2 = ctx.pushSolver();
 		CPPUNIT_ASSERT(ctx.concurrency() == 2);
 		ctx.startAddConstraints();
 		cl.start().add(~a).add(~b).add(~c).add(~d).end();
@@ -1722,8 +1780,8 @@ public:
 		}
 	}
 	void testPushAux() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		CPPUNIT_ASSERT(s.numVars() == s.sharedContext()->numVars());
@@ -1735,7 +1793,7 @@ public:
 		clause.push_back(posLit(aux));
 		clause.push_back(a);
 		clause.push_back(b);
-		ClauseCreator::create(s, clause, 0, Constraint_t::learnt_conflict);
+		ClauseCreator::create(s, clause, 0, Constraint_t::Conflict);
 		CPPUNIT_ASSERT(s.sharedContext()->numTernary() == 0);
 		CPPUNIT_ASSERT(s.numLearntConstraints() == 1);
 		s.assume(~a) && s.propagate();
@@ -1746,15 +1804,15 @@ public:
 		CPPUNIT_ASSERT(s.numVars() == s.sharedContext()->numVars());
 	}
 	void testPushAuxFact() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		Var aux = s.pushAuxVar();
 		LitVec clause;
 		clause.push_back(posLit(aux));
 		clause.push_back(a);
-		ClauseCreator::create(s, clause, 0, Constraint_t::learnt_conflict);
+		ClauseCreator::create(s, clause, 0, Constraint_t::Conflict);
 		s.force(~a) && s.propagate();
 		s.force(b)  && s.simplify();
 		CPPUNIT_ASSERT(s.numFreeVars() == 0);
@@ -1762,9 +1820,9 @@ public:
 		CPPUNIT_ASSERT(s.numFreeVars() == 0 && s.validVar(aux) == false);
 	}
 	void testPopAuxRemovesConstraints() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal c = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal c = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		Var aux = s.pushAuxVar();
@@ -1773,20 +1831,37 @@ public:
 		clause.push_back(b);
 		clause.push_back(c);
 		clause.push_back(posLit(aux));
-		ClauseCreator::create(s, clause, 0, Constraint_t::learnt_conflict);
+		ClauseCreator::create(s, clause, 0, Constraint_t::Conflict);
 		clause.clear();
 		clause.push_back(a);
 		clause.push_back(b);
 		clause.push_back(~c);
 		clause.push_back(negLit(aux));
-		ClauseCreator::create(s, clause, 0, Constraint_t::learnt_conflict);
+		ClauseCreator::create(s, clause, 0, Constraint_t::Conflict);
 		CPPUNIT_ASSERT(s.numLearntConstraints() == 2);
 		s.popAuxVar();
 		CPPUNIT_ASSERT(s.numLearntConstraints() == 0);
 	}
+	void testPopAuxRemovesConstraintsRegression() {
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal c = posLit(ctx.addVar(Var_t::Atom));
+		Solver& s = ctx.startAddConstraints();
+		ctx.endInit();
+		Var aux = s.pushAuxVar();
+		WeightLitVec lits;
+		lits.push_back(WeightLiteral(a, 1));
+		lits.push_back(WeightLiteral(b, 1));
+		lits.push_back(WeightLiteral(c, 1));
+		lits.push_back(WeightLiteral(posLit(aux), 1));
+		Solver::ConstraintDB t;
+		t.push_back(WeightConstraint::create(s, lit_false(), lits, 3, WeightConstraint::create_explicit | WeightConstraint::create_no_add | WeightConstraint::create_no_freeze | WeightConstraint::create_no_share).first());
+		s.force(posLit(aux)) && s.propagate();
+		s.popAuxVar(1, &t);
+	}
 	void testPopAuxMaintainsQueue() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		Var aux = s.pushAuxVar();
@@ -1798,18 +1873,18 @@ public:
 	}
 
 	void testIncrementalAux() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
-		Solver& s2= ctx.addSolver();
+		Solver& s2= ctx.pushSolver();
 		ctx.endInit(true);
 		Var aux   = s2.pushAuxVar();
 		CPPUNIT_ASSERT(!ctx.validVar(aux) && !s.validVar(aux));
 		LitVec clause;
 		clause.push_back(a);
 		clause.push_back(posLit(aux));
-		ClauseCreator::create(s2, clause, 0, Constraint_t::learnt_conflict);
+		ClauseCreator::create(s2, clause, 0, Constraint_t::Conflict);
 		ctx.unfreeze();
-		Var n     = ctx.addVar(Var_t::atom_var);
+		Var n     = ctx.addVar(Var_t::Atom);
 		ctx.startAddConstraints();
 		ctx.endInit(true);
 		s2.assume(negLit(n)) && s2.propagate();
@@ -1817,11 +1892,10 @@ public:
 	}
 
 	void testUnfreezeStepBug() {
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		ctx.requestStepVar();
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
-		Solver& s2= ctx.addSolver();
+		Solver& s2= ctx.pushSolver();
 		ctx.addBinary(~a, b);
 		ctx.endInit(true);
 		s2.force(b);
@@ -1831,9 +1905,8 @@ public:
 		CPPUNIT_ASSERT(s.isTrue(b));
 	}
 	void testRemoveConstraint() {
-		ctx.requestStepVar();
 		Solver& s = ctx.startAddConstraints();
-		Solver& s2= ctx.addSolver();
+		Solver& s2= ctx.pushSolver();
 		ctx.add(new TestingConstraint());
 		ctx.endInit(true);
 		CPPUNIT_ASSERT(s2.numConstraints() == 1);
@@ -1848,6 +1921,95 @@ public:
 		CPPUNIT_ASSERT(s.numConstraints() == 2);
 		CPPUNIT_ASSERT(s2.numConstraints() == 3);
 	}
+	void testPopVars() {
+		ctx.addVar(Var_t::Atom);
+		ctx.addVar(Var_t::Atom);
+		ctx.addVar(Var_t::Atom);
+		CPPUNIT_ASSERT(ctx.numVars() == 3u);
+		CPPUNIT_ASSERT(ctx.master()->numVars() == 0u);
+		ctx.popVars(2);
+		CPPUNIT_ASSERT(ctx.numVars() == 1u);
+	}
+	void testPopVarsAfterCommit() {
+		ctx.addVar(Var_t::Atom);
+		ctx.addVar(Var_t::Atom);
+		ctx.addVar(Var_t::Atom);
+		ctx.startAddConstraints();
+		CPPUNIT_ASSERT(ctx.master()->numVars() == 3u);
+		CPPUNIT_ASSERT(ctx.master()->numFreeVars() == 3u);
+		ctx.popVars(2);
+		CPPUNIT_ASSERT(ctx.numVars() == 1u);
+		ctx.endInit();
+		CPPUNIT_ASSERT(ctx.master()->numVars() == 1u);
+		CPPUNIT_ASSERT(ctx.master()->numFreeVars() == 1u);
+	}
+	void testPopVarsIncremental() {
+		ctx.requestStepVar();
+		Var v1 = ctx.addVar(Var_t::Atom);
+		Var v2 = ctx.addVar(Var_t::Atom);
+		Var v3 = ctx.addVar(Var_t::Atom);
+		ctx.startAddConstraints();
+		ctx.endInit();
+		CPPUNIT_ASSERT(ctx.numVars() == 4u);
+		CPPUNIT_ASSERT(ctx.stepLiteral().var() == 4u);
+		ctx.addUnary(posLit(v3));
+		ctx.addUnary(posLit(v1));
+		CPPUNIT_ASSERT(ctx.master()->trail().size() == 2u);
+		CPPUNIT_ASSERT(ctx.master()->trail()[0] == posLit(v3));
+		CPPUNIT_ASSERT(ctx.master()->trail()[1] == posLit(v1));
+		ctx.unfreeze();
+		ctx.popVars(2u);
+		CPPUNIT_ASSERT_MESSAGE("step var is not counted", ctx.numVars() == 1u);
+		CPPUNIT_ASSERT(ctx.stepLiteral().var() == 0u);
+		CPPUNIT_ASSERT(ctx.master()->trail().size() == 1u);
+		CPPUNIT_ASSERT(ctx.master()->trail()[0] == posLit(v1));
+		ctx.endInit();
+		ctx.unfreeze();
+		Var v = ctx.addVar(Var_t::Atom);
+		ctx.setFrozen(v, true);
+		ctx.startAddConstraints();
+		ctx.endInit();
+		CPPUNIT_ASSERT(ctx.numVars() == 3u);
+		ctx.unfreeze();
+		ctx.popVars(2u);
+		CPPUNIT_ASSERT_MESSAGE("step var is not counted", ctx.stepLiteral().var() == 0u);
+		CPPUNIT_ASSERT(ctx.stats().vars.frozen == 0u);
+	}
+	void testPopVarsIncrementalBug() {
+		ctx.requestStepVar();
+		Var a = ctx.addVar(Var_t::Atom);
+		Var b = ctx.addVar(Var_t::Atom);
+		ctx.startAddConstraints();
+		ctx.endInit();
+		ctx.unfreeze();
+		Var c = ctx.addVar(Var_t::Atom);
+		Var d = ctx.addVar(Var_t::Atom);
+		ctx.startAddConstraints();
+		ctx.addUnary(posLit(c));
+		ctx.popVars(1);
+		ctx.endInit();
+		CPPUNIT_ASSERT(ctx.master()->isTrue(posLit(c)));
+		CPPUNIT_ASSERT(ctx.master()->numFreeVars() == 3);
+		CPPUNIT_ASSERT(ctx.master()->numAssignedVars() == 1);
+	}
+	void testPopVarsMT() {
+		ctx.requestStepVar();
+		Var a = ctx.addVar(Var_t::Atom);
+		Var b = ctx.addVar(Var_t::Atom);
+		Var c = ctx.addVar(Var_t::Atom);
+		Solver& s2 = ctx.pushSolver();
+		ctx.startAddConstraints();
+		ctx.endInit(true);
+		s2.force(posLit(c));
+		ctx.unfreeze();
+		CPPUNIT_ASSERT(ctx.master()->isTrue(posLit(c)) && s2.isTrue(posLit(c)));
+		ctx.popVars(2); // pop c, b
+		Var d = ctx.addVar(Var_t::Atom);
+		ctx.startAddConstraints();
+		CPPUNIT_ASSERT(ctx.master()->value(d) == value_free);
+		ctx.endInit(true);
+		CPPUNIT_ASSERT(s2.value(d) == value_free);
+	}
 private:
 	SharedContext ctx;
 	void integrateGp(Solver& s, LitVec& gp) {
@@ -1861,8 +2023,8 @@ private:
 	}
 	LitVec addBinary() {
 		LitVec r;
-		r.push_back( posLit(ctx.addVar(Var_t::atom_var)) );
-		r.push_back( posLit(ctx.addVar(Var_t::atom_var)) );
+		r.push_back( posLit(ctx.addVar(Var_t::Atom)) );
+		r.push_back( posLit(ctx.addVar(Var_t::Atom)) );
 		ctx.startAddConstraints();
 		ctx.addBinary(r[0], r[1]);
 		ctx.endInit();
@@ -1870,9 +2032,9 @@ private:
 	}
 	LitVec addTernary() {
 		LitVec r;
-		r.push_back( posLit(ctx.addVar(Var_t::atom_var)) );
-		r.push_back( posLit(ctx.addVar(Var_t::atom_var)) );
-		r.push_back( posLit(ctx.addVar(Var_t::atom_var)) );
+		r.push_back( posLit(ctx.addVar(Var_t::Atom)) );
+		r.push_back( posLit(ctx.addVar(Var_t::Atom)) );
+		r.push_back( posLit(ctx.addVar(Var_t::Atom)) );
 		ctx.startAddConstraints();
 		ctx.addTernary(r[0], r[1],r[2]);
 		ctx.endInit();

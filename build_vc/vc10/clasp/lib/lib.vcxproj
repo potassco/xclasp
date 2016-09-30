@@ -161,7 +161,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;_DEBUG;_LIB;_SCL_SECURE_NO_WARNINGS;WITH_THREADS=1;CLASP_ENABLE_PRAGMA_TODO=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -175,7 +175,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;_DEBUG;_LIB;_SCL_SECURE_NO_WARNINGS;WITH_THREADS=1;CLASP_ENABLE_PRAGMA_TODO=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
@@ -189,7 +189,7 @@
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;WITH_THREADS=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -203,7 +203,7 @@
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;WITH_THREADS=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -217,7 +217,7 @@
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;_SECURE_SCL=0;WITH_THREADS=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <BufferSecurityCheck>false</BufferSecurityCheck>
@@ -234,7 +234,7 @@
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;_SECURE_SCL=0;WITH_THREADS=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <BufferSecurityCheck>false</BufferSecurityCheck>
@@ -251,7 +251,7 @@
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;_SECURE_SCL=0;__TBB_NO_IMPLICIT_LINKAGE;WITH_THREADS=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <BufferSecurityCheck>false</BufferSecurityCheck>
@@ -268,7 +268,7 @@
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;_SECURE_SCL=0;__TBB_NO_IMPLICIT_LINKAGE;WITH_THREADS=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <BufferSecurityCheck>false</BufferSecurityCheck>
@@ -288,6 +288,7 @@
     <ClCompile Include="..\..\..\..\libclasp\src\clasp_options.cpp" />
     <ClCompile Include="..\..\..\..\libclasp\src\clasp_output.cpp" />
     <ClCompile Include="..\..\..\..\libclasp\src\clause.cpp" />
+    <ClCompile Include="..\..\..\..\libclasp\src\clingo.cpp" />
     <ClCompile Include="..\..\..\..\libclasp\src\constraint.cpp" />
     <ClCompile Include="..\..\..\..\libclasp\src\dependency_graph.cpp" />
     <ClCompile Include="..\..\..\..\libclasp\src\enumerator.cpp" />
@@ -306,6 +307,7 @@
     <ClCompile Include="..\..\..\..\libclasp\src\solver.cpp" />
     <ClCompile Include="..\..\..\..\libclasp\src\solver_strategies.cpp" />
     <ClCompile Include="..\..\..\..\libclasp\src\solver_types.cpp" />
+    <ClCompile Include="..\..\..\..\libclasp\src\statistics.cpp" />
     <ClCompile Include="..\..\..\..\libclasp\src\timer.cpp" />
     <ClCompile Include="..\..\..\..\libclasp\src\unfounded_check.cpp" />
     <ClCompile Include="..\..\..\..\libclasp\src\weight_constraint.cpp" />
@@ -316,6 +318,7 @@
     <ClInclude Include="..\..\..\..\libclasp\clasp\clasp_facade.h" />
     <ClInclude Include="..\..\..\..\libclasp\clasp\claspfwd.h" />
     <ClInclude Include="..\..\..\..\libclasp\clasp\clause.h" />
+    <ClInclude Include="..\..\..\..\libclasp\clasp\clingo.h" />
     <ClInclude Include="..\..\..\..\libclasp\clasp\constraint.h" />
     <ClInclude Include="..\..\..\..\libclasp\clasp\dependency_graph.h" />
     <ClInclude Include="..\..\..\..\libclasp\clasp\enumerator.h" />
@@ -336,6 +339,7 @@
     <ClInclude Include="..\..\..\..\libclasp\clasp\solver.h" />
     <ClInclude Include="..\..\..\..\libclasp\clasp\solver_strategies.h" />
     <ClInclude Include="..\..\..\..\libclasp\clasp\solver_types.h" />
+    <ClInclude Include="..\..\..\..\libclasp\clasp\statistics.h" />
     <ClInclude Include="..\..\..\..\libclasp\clasp\unfounded_check.h" />
     <ClInclude Include="..\..\..\..\libclasp\clasp\weight_constraint.h" />
     <ClInclude Include="..\..\..\..\libclasp\clasp\util\atomic.h" />

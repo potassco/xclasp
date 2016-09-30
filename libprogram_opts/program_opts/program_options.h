@@ -27,7 +27,6 @@
 #include <map>
 #include <vector>
 #include <stdexcept>
-#include <memory>
 #include <cstdio>
 namespace ProgramOptions {
 
@@ -120,7 +119,6 @@ public:
 	OptionInitHelper addOptions();
 
 	//! Adds option to this group.
-	void addOption(std::auto_ptr<Option> option);
 	void addOption(const SharedOptPtr& option);
 
 	void setDescriptionLevel(DescriptionLevel level) { level_ = level; }
@@ -475,6 +473,24 @@ ParsedValues parseCommandLine(int& argc, char** argv, const OptionContext& ctx,
 	PosOption posParser = 0, unsigned flags = 0);
 
 ParseContext& parseCommandLine(int& argc, char** argv, ParseContext& ctx, unsigned flags = 0); 
+
+/*!
+* Parses the command arguments given in the array args.
+* \param args  the arguments to parse
+* \param nArgs number of arguments in args.
+* \param ctx options to search in the arguments
+* \param allowUnregistered Allow arguments that match no option in ctx
+* \param posParser parse function for positional options
+*
+* \return A ParsedOptions-Object containing names and values for all options found.
+* 
+* \throw SyntaxError if argument syntax is incorrect.
+* \throw UnknownOption if allowUnregistered is false and an argument is found
+* that does not match any option.
+*/
+ParsedValues parseCommandArray(const char* const args[], unsigned nArgs, const OptionContext& ctx,
+	bool allowUnregistered = true,
+	PosOption posParser = 0, unsigned flags = 0);
 
 /*!
 * Parses the command line given in the first parameter.

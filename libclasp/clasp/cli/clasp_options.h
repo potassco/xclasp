@@ -21,7 +21,6 @@
 #define CLASP_CLI_CLASP_OPTIONS_H_INCLUDED
 
 #ifdef _MSC_VER
-#pragma warning (disable : 4200) // nonstandard extension used : zero-sized array
 #pragma once
 #endif
 
@@ -33,18 +32,27 @@ class OptionContext;
 class OptionGroup;
 class ParsedOptions;
 }
+/*!
+ * \file
+ * \brief Types and functions for processing command-line options.
+ */
 namespace Clasp { 
 //! Namespace for types and functions used by the command-line interface.
 namespace Cli {
 
 /**
- * \defgroup cli Types to be used by the command-line interface.
+ * \defgroup cli Cli
+ * \brief Types mainly relevant to the command-line interface.
+ * \ingroup facade
+ * @{
  */
-//@{
+
 class ClaspCliConfig;
+//! Class for iterating over a set of configurations.
 class ConfigIter {
 public:
 	const char* name() const;
+	const char* base() const;
 	const char* args() const;
 	bool        valid()const;
 	bool        next();
@@ -54,6 +62,9 @@ private:
 	const char* base_;
 };
 //! Valid configuration keys.
+/*!
+ * \see clasp_cli_configs.inl
+ */
 enum ConfigKey {
 #define CONFIG(id,k,c,s,p) config_##k,
 #define CLASP_CLI_DEFAULT_CONFIGS config_default = 0,
@@ -64,10 +75,10 @@ enum ConfigKey {
 	config_max_value,
 	config_asp_default   = config_tweety,
 	config_sat_default   = config_trendy,
-	config_tester_default= config_frumpy,
+	config_tester_default= config_tester,
 };
 /*!
- * Configuration object for storing/processing command-line options.
+ * \brief Class for storing/processing command-line options.
  *
  * Caveats (when using incrementally, e.g. from clingo):
  * - supp-models: State Transition (yes<->no) not supported.
@@ -81,13 +92,8 @@ enum ConfigKey {
  *     - A stats level once activated stays activated even if 
  *       level is subsequently decreased via option.
  *     .
- * - init-moms, score_res, score-other, berk-huang: State fixed on init.
- *     - The options apply to the active decision heuristic and are set
- *       once during construction of the heuristic. 
- *     - They are updated only if the heuristic changes or forget-on-step includes heuristic
- *     .
- * - save-progress, sign-fix, opt-heuristic, dom-mod: No unset of previously set values.
- *     - Once set, signs/modifications are only unset if forgetOnStep includes heuristic
+ * - save-progress, sign-fix, opt-heuristic: No unset of previously set values.
+ *     - Once set, signs are only unset if forgetOnStep includes sign.
  *     . 
  * - no-lookback: State Transition (yes<->no) not supported.
  *     - noLookback=yes is a destructive meta-option that disables lookback-options by changing their value
@@ -106,31 +112,31 @@ public:
 	// Base interface
 	virtual void prepare(SharedContext&);
 	virtual void reset();
+	virtual Configuration* config(const char*);
 
 	/*!
 	 * \name Key-based low-level interface
 	 *
 	 * The functions in this group do not throw exceptions but 
 	 * signal logic errors via return values < 0.
-	 */
-	//@{
+	 * @{ */
 
 	typedef uint32 KeyType;	
-	static const KeyType INVALID_KEY; /**< Invalid key used to signal errors. */
-	static const KeyType KEY_ROOT;    /**< Root key of a configuration, i.e. "." */
-	static const KeyType KEY_TESTER;  /**< Root key for tester options, i.e. "tester." */
-	static const KeyType KEY_SOLVER;  /**< Root key for (array of) solver options, i.e. "solver." */
+	static const KeyType KEY_INVALID; //!< Invalid key used to signal errors.
+	static const KeyType KEY_ROOT;    //!< Root key of a configuration, i.e. "."
+	static const KeyType KEY_TESTER;  //!< Root key for tester options, i.e. "tester."
+	static const KeyType KEY_SOLVER;  //!< Root key for (array of) solver options, i.e. "solver."
 	
-	//! Returns true if k is a leaf, i.e. has not subkeys.
+	//! Returns true if k is a leaf, i.e. has no subkeys.
 	static bool  isLeafKey(KeyType k);
 
 	//! Retrieves a handle to the specified key.
 	/*!
-	 * \param root A valid handle to a key.
+	 * \param key A valid handle to a key.
 	 * \param name The name of the subkey to retrieve.
 	 * \return 
 	 *   - key, if name is 0 or empty.
-	 *   - INVALID_KEY, if name is not a subkey of key.
+	 *   - KEY_INVALID, if name is not a subkey of key.
 	 *   - A handle to the subkey.
 	 *   .
 	 */
@@ -142,7 +148,7 @@ public:
 	 * \param element The index of the element to retrieve.
 	 * \return
 	 *   - A handle to the requested element, or
-	 *   - INVALID_KEY, if arr does not reference an array or element is out of bounds.
+	 *   - KEY_INVALID, if arr does not reference an array or element is out of bounds.
 	 *   .
 	 */
 	KeyType getArrKey(KeyType arr, unsigned element) const;
@@ -162,35 +168,23 @@ public:
 	//! Returns the name of the i'th subkey of k or 0 if no such subkey exists.
 	const char* getSubkey(KeyType k, uint32 i) const;
 	
-	//! Creates and returns a null-terminated string representation of the value of the given key.
+	//! Creates and returns a string representation of the value of the given key.
 	/*!
-	 * \param key  A valid handle to a key.
+	 * \param k  A valid handle to a key.
 	 * \param[out] value The current value of the key.
 	 * \return The length of value or < 0 if k either has no value (-1) or an error occurred while writing the value (< -1).
-   */
+	 */
 	int getValue(KeyType k, std::string& value) const;
 	 
-	/*! 
-	 * \overload int getValue(KeyType k, std::string& out) const;
-	 *
-	 * \note If value is not 0, the function allocates memory for storing value. 
-	 *   It is the caller's responsibility to eventually release the returned 
-	 *   value via a call to releaseValue().
-   */
-	int  getValue(KeyType key, char** value) const;
-	
 	//! Writes a null-terminated string representation of the value of the given key into the supplied buffer.
 	/*!
-	 * \overload int getValue(KeyType k, std::string& out) const;
+	 * \param k A valid handle to a key.
 	 * \param[out] buffer The current value of the key.
 	 * \param bufSize The size of buffer.
 	 * \note Although the number returned can be larger than the bufSize, the function
 	 *   never writes more than bufSize bytes into the buffer.
 	 */
-	int getValue(KeyType key, char* buffer, std::size_t bufSize) const;
-	
-	//! Releases the given string previously allocated by queryKeyValue().
-	void releaseValue(const char* value) const;
+	int getValue(KeyType k, char* buffer, std::size_t bufSize) const;
 	
 	//! Sets the option identified by the given key.
 	/*!
@@ -211,8 +205,7 @@ public:
 	 *
 	 * The functions in this group wrap the key-based functions and
 	 * signal logic errors by throwing exceptions.
-	 */
-	//@{
+	 * @{ */
 	//! Returns the value of the option identified by the given key.
 	std::string getValue(const char* key) const;
 	//! Returns true if the given key has an associated value.
@@ -226,8 +219,9 @@ public:
 	
 	/*!
 	 * \name App interface 
-	 */
-	//@{
+	 * 
+	 * Functions for connecting a configuration with the ProgramOptions library.
+	 * @{ */
 	//! Adds all available options to root.
 	/*!
 	 * Once options are added, root can be used with an option source (e.g. the command-line)
@@ -241,6 +235,7 @@ public:
 	//! Populates this configuration with the options given in [first, last) and finalizes it.
 	/*!
 	 * \param [first, last) a range of options in argv format.
+	 * \param t Problem type for which this configuration is created. Used to set defaults.
 	 */
 	template <class IT>
 	bool setConfig(IT first, IT last, ProblemType t) {
@@ -302,11 +297,13 @@ private:
 	bool             isGenerator() const { return (cliMode & mode_tester) == 0; }
 	const UserConfig*active()const       { return isGenerator() ? this : testerConfig(); }
 	UserConfig*      active()            { return isGenerator() ? this : testerConfig(); }
-	bool             match(const char*& path, const char* what, bool matchDot = true) const;
+	bool             match(const char*& path, const char* what) const;
 	static OptIndex  index_g;
 	OptionsPtr       opts_;
 	std::string      config_[2];
+	bool             initTester_;
 };
+//! Validates the given solver configuration and throws an exception if invalid.
 void validate(const char* ctx, const SolverParams& solver, const SolveParams& search);
 //@}
 

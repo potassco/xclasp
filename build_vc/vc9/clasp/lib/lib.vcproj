@@ -41,7 +41,7 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				Optimization="0"
-				AdditionalIncludeDirectories="..\..\..\..\libclasp;..\..\..\..\libprogram_opts"
+				AdditionalIncludeDirectories="..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts"
 				PreprocessorDefinitions="WIN32;_DEBUG;_LIB;_SCL_SECURE_NO_WARNINGS;WITH_THREADS=1;CLASP_ENABLE_PRAGMA_TODO=1"
 				MinimalRebuild="true"
 				BasicRuntimeChecks="3"
@@ -105,8 +105,8 @@
 				Name="VCCLCompilerTool"
 				Optimization="2"
 				EnableIntrinsicFunctions="true"
-				AdditionalIncludeDirectories="..\..\..\..\libclasp;..\..\..\..\libprogram_opts"
-				PreprocessorDefinitions="WIN32;NDEBUG;_LIB;WITH_THREADS=1"
+				AdditionalIncludeDirectories="..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts"
+				PreprocessorDefinitions="WIN32;NDEBUG;_LIB;WITH_THREADS=1;_SCL_SECURE_NO_WARNINGS"
 				RuntimeLibrary="2"
 				EnableFunctionLevelLinking="true"
 				UsePrecompiledHeader="0"
@@ -169,7 +169,7 @@
 				Name="VCCLCompilerTool"
 				Optimization="2"
 				EnableIntrinsicFunctions="true"
-				AdditionalIncludeDirectories="..\..\..\..\libclasp;..\..\..\..\libprogram_opts"
+				AdditionalIncludeDirectories="..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts"
 				PreprocessorDefinitions="WIN32;NDEBUG;_LIB;_SECURE_SCL=0;WITH_THREADS=0"
 				RuntimeLibrary="0"
 				BufferSecurityCheck="false"
@@ -235,7 +235,7 @@
 				Name="VCCLCompilerTool"
 				Optimization="2"
 				EnableIntrinsicFunctions="true"
-				AdditionalIncludeDirectories="..\..\..\..\libclasp;..\..\..\..\libprogram_opts"
+				AdditionalIncludeDirectories="..\..\..\..\libclasp;..\..\..\..\liblp;..\..\..\..\libprogram_opts"
 				PreprocessorDefinitions="WIN32;NDEBUG;_LIB;_SECURE_SCL=0;__TBB_NO_IMPLICIT_LINKAGE;WITH_THREADS=1"
 				RuntimeLibrary="0"
 				BufferSecurityCheck="false"
@@ -304,6 +304,10 @@
 			</File>
 			<File
 				RelativePath="..\..\..\..\libclasp\src\clause.cpp"
+				>
+			</File>
+			<File
+				RelativePath="..\..\..\..\libclasp\src\clingo.cpp"
 				>
 			</File>
 			<File
@@ -379,6 +383,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\..\..\libclasp\src\statistics.cpp"
+				>
+			</File>
+			<File
 				RelativePath="..\..\..\..\libclasp\src\timer.cpp"
 				>
 			</File>
@@ -414,6 +422,10 @@
 			</File>
 			<File
 				RelativePath="..\..\..\..\libclasp\clasp\clause.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\..\..\libclasp\clasp\clingo.h"
 				>
 			</File>
 			<File
@@ -494,6 +506,10 @@
 			</File>
 			<File
 				RelativePath="..\..\..\..\libclasp\clasp\solver_types.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\..\..\libclasp\clasp\statistics.h"
 				>
 			</File>
 			<File

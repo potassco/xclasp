@@ -1,3 +1,36 @@
+clasp 3.2.0: Thursday, 8th September 2016
+  * added experimental support for new asp format and changed "--pre" option to use it
+  * added propagator for acyclicity constraint (#edge-directive)
+  * added option "--parse-ext" for enabling input extentions:
+    - acyc constraints in smodels, dimacs, and opb format,
+    - objective function in dimacs format,
+    - projection, assumption, output, heuristic directives in dimacs and opb format
+  * added stratification heuristic for weights in core-guided optimization enabled via
+    "--opt-strategy=usc,{8-15}"
+  * added support for parallel solving via C++11 threads instead of Intel TBB (see README)
+  * added ClaspFacade::startSolve() for synchronous (possibly single-threaded) model generation
+  * added option "--vsids-acids" for enabling average conflict-index decision scoring in vsids
+  * added option "--vsids-progress" for enabling Glucose-style decreasing decay scheme
+  * added option "--block-restarts" for enabling Glucose-style blocking of restarts
+  * added option "--del-protect" for enabling Glucose-style temporary freezing of learnt nogods
+  * option "--dom-mod" now also supports modifiers "factor" and "init" and also
+    applies to problems in dimacs and opb format
+  * added support for updating heuristic options in multishot solving
+    (init-moms, score-res, score-other, berk-huang, dom-mod)
+  * added support for config inheritance in portfolio configurations
+  * changed default configuration of tester in disjunctive asp solving
+  * improved handling of extended rules in computation of loop nogoods
+  * improved handling of equivalent and complementary atoms in domain heuristic
+  * option "--nant" now also applies to lookback heuristics
+  * option "--lemma-out" now resolves lemmas to problem variables
+    - added "--lemma-out-dom" for setting variable domain to either input or output
+    - added "--lemma-out-txt" for logging lemmas in ground lp format
+    - added "--lemma-out-max" for limiting number of logged lemmas
+  * replaced "--sign-def=4" with "--sign-def-disj=<x>" for setting default sign of disjunctive atoms
+  * made lower bound updates in parallel optimization lock-free
+  * switched to a more compact representation of input facts in smodels format
+  * replaced old symbol table with simple output list
+
 clasp 3.1.5: Friday, 5th August 2016 (updated: 11th August 2016)
   * fixed: projective enumeration failed to work with option "--no-lookback"
   * fixed: invalid models in parallel disjunctive solving due to unsynchronized simplifications
@@ -7,7 +40,7 @@ clasp 3.1.5: Friday, 5th August 2016 (updated: 11th August 2016)
   * fixed: Sat-Preprocessor failed to propagate resolution of empty clause
   * fixed: simplifications after end of incremental step not always propagated to all threads
   * fixed too strong assertion in eq-preprocessor
-
+  
 clasp 3.1.4: Thursday, 10th December 2015
   * fixed: "--pre" failed to handle choice/disjunctive heads defined by extended bodies
   * fixed: "--backprop" failed to backpropagte certain constraints when used with "--eq=0"
@@ -62,9 +95,9 @@ clasp 3.1.0: Friday, 15th August 2014
     - renamed option "--number" to "--models"
   * Integration/clingo:
     - added support for open (i.e. unassigned) externals
-	- added support for adding constraints via model callback
-	- added low-level interface for accessing a clasp configuration
-	- cleaned up some stats keys and replaced "camelCase" with "snake_case" in keys
+    - added support for adding constraints via model callback
+    - added low-level interface for accessing a clasp configuration
+    - cleaned up some stats keys and replaced "camelCase" with "snake_case" in keys
 
 clasp 3.0.6: Monday, 21st July 2014
   * fixed: parallel unsat-core based enumeration of optimal models could skip valid models

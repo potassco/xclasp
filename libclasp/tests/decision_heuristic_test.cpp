@@ -18,6 +18,7 @@
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
 #include "test.h"
+#include "lpcompare.h"
 #include <clasp/heuristics.h>
 #include <clasp/lookahead.h>
 #include <clasp/logic_program.h>
@@ -27,7 +28,6 @@ namespace Clasp { namespace Test {
 using namespace Clasp::Asp;
 class DecisionHeuristicTest : public CppUnit::TestFixture {
   CPPUNIT_TEST_SUITE(DecisionHeuristicTest);
-	CPPUNIT_TEST(testTrivial);
 	CPPUNIT_TEST(testBodyLookahead);
 	CPPUNIT_TEST(testAtomLookahead);
 	CPPUNIT_TEST(testLookaheadBugNoSimplify);
@@ -40,7 +40,6 @@ class DecisionHeuristicTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testVmtf);
 	CPPUNIT_TEST(testVsids);
 	CPPUNIT_TEST(testVsidsAux);
-	CPPUNIT_TEST(testResurrect);
 	CPPUNIT_TEST(testStrangeLookSeq);
 	CPPUNIT_TEST(testStrangeLookSeq2);
 	CPPUNIT_TEST(testRestrictDetach);
@@ -53,155 +52,158 @@ class DecisionHeuristicTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testDomDynamic);
 	CPPUNIT_TEST(testDomPrio);
 	CPPUNIT_TEST(testDomPrio2);
+	CPPUNIT_TEST(testDomPrio3);
 	CPPUNIT_TEST(testDomInit);
 	CPPUNIT_TEST(testDomInc);
 	CPPUNIT_TEST(testDomIncPrio);
+	CPPUNIT_TEST(testDomIncDynPrio);
 	CPPUNIT_TEST(testDomReinit);
 	CPPUNIT_TEST(testDomMinBug);
-	CPPUNIT_TEST(testDomSignPrio);
-	CPPUNIT_TEST(testDomPrefixBug);
 	CPPUNIT_TEST(testDomSameVar);
+
+	CPPUNIT_TEST(testDomEqAtomLevel);
+	CPPUNIT_TEST(testDomEqAtomSign);
+	CPPUNIT_TEST(testDomCompAtomLevel);
+	CPPUNIT_TEST(testDomCompAtomSign);
+	CPPUNIT_TEST(testDomCompAtomTF);
+
+	CPPUNIT_TEST(testDomDefault);
+
+	CPPUNIT_TEST(testDomAtomicPrio);
+	CPPUNIT_TEST(testDomEqVarDiffLevel);
+	CPPUNIT_TEST(testDomEqVarDiffLevelInc);
+	CPPUNIT_TEST(testDomEqVarDiffLevelCond);
+
 	CPPUNIT_TEST_SUITE_END();
+
+	LogicProgram lp;
 public:
-	void testTrivial() {
-		SharedContext ctx;
-		ctx.master()->setHeuristic(new UnitHeuristic());
-		ctx.startAddConstraints();
-		CPPUNIT_ASSERT_EQUAL(true, ctx.endInit());
-	}
 	void testBodyLookahead() {
 		SharedContext ctx;
-		Solver& s = ctx.addSolver();
-		LogicProgram api;
-		api.start(ctx, LogicProgram::AspOptions().noEq().noScc())
-			.setAtomName(1, "x").setAtomName(2, "a1").setAtomName(3, "a2").setAtomName(4, "a3")
-			.setAtomName(5, "b1").setAtomName(6, "b2").setAtomName(7, "b3")
-			.startRule().addHead(1).addToBody(1, false).endRule()
-			.startRule().addHead(1).addToBody(2, false).addToBody(5, false).endRule()
-			.startRule().addHead(2).addToBody(5, false).endRule()
-			.startRule().addHead(5).addToBody(2, false).endRule()
-			.startRule().addHead(1).addToBody(3, false).addToBody(6, false).endRule()
-			.startRule().addHead(3).addToBody(6, false).endRule()
-			.startRule().addHead(6).addToBody(3, false).endRule()
-			.startRule().addHead(1).addToBody(4, false).addToBody(7, false).endRule()
-			.startRule().addHead(4).addToBody(7, false).endRule()
-			.startRule().addHead(7).addToBody(4, false).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		s.addPost(new Lookahead(Lookahead::Params(Lookahead::body_lookahead).addImps(false)));
+		Solver& s = ctx.pushSolver();
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().noEq().noScc()),
+			"x1 :- not x1.\n"
+			"x1 :- not x2, not x5.\n"
+			"x2 :- not x5.\n"
+			"x5 :- not x2.\n"
+			"x1 :- not x3, not x6.\n"
+			"x3 :- not x6.\n"
+			"x6 :- not x3.\n"
+			"x1 :- not x4, not x7.\n"
+			"x4 :- not x7.\n"
+			"x7 :- not x4.\n");
+		
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		s.addPost(new Lookahead(Lookahead::Params(Var_t::Body).addImps(false)));
 		CPPUNIT_ASSERT_EQUAL(false, ctx.attach(s));
 		ctx.detach(s, true);
-		s.addPost(new Lookahead(Lookahead::Params(Lookahead::atom_lookahead).addImps(false)));
+		s.addPost(new Lookahead(Lookahead::Params(Var_t::Atom).addImps(false)));
 		CPPUNIT_ASSERT_EQUAL(true, ctx.attach(s));
 		ctx.detach(s, true);
-		s.addPost(new Lookahead(Lookahead::Params(Lookahead::hybrid_lookahead).addImps(false)));
+		s.addPost(new Lookahead(Lookahead::Params(Var_t::Hybrid).addImps(false)));
 		CPPUNIT_ASSERT_EQUAL(false, ctx.attach(s));
 	}
 	void testAtomLookahead() {
 		SharedContext ctx;
-		Solver& s = ctx.addSolver();
-		LogicProgram api;
-		api.start(ctx, LogicProgram::AspOptions().noEq().noScc())
-			.setAtomName(1, "x").setAtomName(2, "c1").setAtomName(3, "c2").setAtomName(4, "c3")
-			.setAtomName(5, "a1").setAtomName(6, "a2").setAtomName(7, "a3")
-			.setAtomName(8, "b1").setAtomName(9, "b2").setAtomName(10, "b3")
-			.startRule().addHead(1).addToBody(2, true).addToBody(3, true).addToBody(4, true).addToBody(1, false).endRule()
-			.startRule().addHead(2).addToBody(5, false).endRule()
-			.startRule().addHead(2).addToBody(8, false).endRule()
-			.startRule().addHead(5).addToBody(8, false).endRule()
-			.startRule().addHead(8).addToBody(5, false).endRule()
-			.startRule().addHead(3).addToBody(6, false).endRule()
-			.startRule().addHead(3).addToBody(9, false).endRule()
-			.startRule().addHead(6).addToBody(9, false).endRule()
-			.startRule().addHead(9).addToBody(6, false).endRule()
-			.startRule().addHead(4).addToBody(7, false).endRule()
-			.startRule().addHead(4).addToBody(10, false).endRule()
-			.startRule().addHead(7).addToBody(10, false).endRule()
-			.startRule().addHead(10).addToBody(7, false).endRule()
-		;
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
+		Solver& s = ctx.pushSolver();
+		lpAdd(lp.start(ctx, LogicProgram::AspOptions().noEq().noScc()),
+			"x1 :- x2, x3, x4, not x1.\n"
+			"x2 :- not x5.\n"
+			"x2 :- not x8.\n"
+			"x5 :- not x8.\n"
+			"x8 :- not x5.\n"
+			"x3 :- not x6.\n"
+			"x3 :- not x9.\n"
+			"x6 :- not x9.\n"
+			"x9 :- not x6.\n"
+			"x4 :- not x7.\n"
+			"x4 :- not x10.\n"
+			"x7 :- not x10.\n"
+			"x10 :- not x7.\n");
+
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
 		Lookahead::Params p; p.addImps(false);
-		s.addPost(new Lookahead(p.lookahead(Lookahead::body_lookahead)));
+		s.addPost(new Lookahead(p.lookahead(Var_t::Body)));
 		CPPUNIT_ASSERT_EQUAL(true, ctx.attach(s));
 		ctx.detach(s, true);
-		s.addPost(new Lookahead(p.lookahead(Lookahead::atom_lookahead)));
+		s.addPost(new Lookahead(p.lookahead(Var_t::Atom)));
 		CPPUNIT_ASSERT_EQUAL(false, ctx.attach(s));
 		ctx.detach(s, true);
-		s.addPost(new Lookahead(p.lookahead(Lookahead::hybrid_lookahead)));
+		s.addPost(new Lookahead(p.lookahead(Var_t::Hybrid)));
 		CPPUNIT_ASSERT_EQUAL(false, ctx.attach(s));
 	}
 
 	void testLookaheadBugNoSimplify() {
-		DecisionHeuristic* unit = new UnitHeuristic();
+		UnitHeuristic unit;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(unit);
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal e = posLit(ctx.addVar(Var_t::atom_var));
+		ctx.master()->setHeuristic(&unit, Ownership_t::Retain);
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal e = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints(10);
 		ctx.addBinary(a,  b);
-		s.addPost(new Lookahead(Lookahead::atom_lookahead));
+		s.addPost(new Lookahead(Var_t::Atom));
 		ctx.endInit();
 		ctx.addBinary(a, ~b);
 		s.assume(e) && s.propagate();
-		CPPUNIT_ASSERT(unit->select(s));
+		CPPUNIT_ASSERT(unit.select(s));
 		CPPUNIT_ASSERT(s.isTrue(a));	
 		CPPUNIT_ASSERT(s.seen(a.var()));
 		CPPUNIT_ASSERT(s.decisionLevel() == 1);
 	}
 	void testLookaheadBugDepsNotCleared() {
-		DecisionHeuristic* unit = new UnitHeuristic();
+		UnitHeuristic unit;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(unit);
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal c = posLit(ctx.addVar(Var_t::atom_var));
-		Literal e = posLit(ctx.addVar(Var_t::atom_var));
-		Literal f = posLit(ctx.addVar(Var_t::atom_var));
+		ctx.master()->setHeuristic(&unit, Ownership_t::Retain);
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal c = posLit(ctx.addVar(Var_t::Atom));
+		Literal e = posLit(ctx.addVar(Var_t::Atom));
+		Literal f = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(a, b);
 		ctx.addBinary(b, c);
 		ctx.addBinary(c, f);
 		ctx.addUnary(e);
-		s.addPost(new Lookahead(Lookahead::atom_lookahead));
+		s.addPost(new Lookahead(Var_t::Atom));
 		ctx.endInit();
 		// Assume without using lookahead (e.g. a random choice)
 		s.assume(b);
 		s.propagate();
 		// Deps not cleared
-		CPPUNIT_ASSERT(unit->select(s));
+		CPPUNIT_ASSERT(unit.select(s));
 		CPPUNIT_ASSERT(s.isFalse(c) || s.isFalse(f));
 	}
 	void testLookaheadBugNoDeps() {
-		DecisionHeuristic* unit = new UnitHeuristic();
+		UnitHeuristic unit;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(unit);
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal c = posLit(ctx.addVar(Var_t::atom_var));
-		Literal e = posLit(ctx.addVar(Var_t::atom_var));
+		ctx.master()->setHeuristic(&unit, Ownership_t::Retain);
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal c = posLit(ctx.addVar(Var_t::Atom));
+		Literal e = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
-		s.addPost(new Lookahead(Lookahead::atom_lookahead));
+		s.addPost(new Lookahead(Var_t::Atom));
 		ctx.addBinary(a, b);
 		ctx.addBinary(b, c);
 		ctx.addUnary(e);
 		ctx.endInit();
-		CPPUNIT_ASSERT(unit->select(s));
+		CPPUNIT_ASSERT(unit.select(s));
 		CPPUNIT_ASSERT(s.isFalse(b));
 		s.undoUntil(0);
 		s.simplify();
-		CPPUNIT_ASSERT(unit->select(s));
+		CPPUNIT_ASSERT(unit.select(s));
 		CPPUNIT_ASSERT(s.isFalse(b));
 	}
 	void testLookaheadBugNoNant() {
-		Clasp::Lookahead::Params p(Lookahead::atom_lookahead);
+		Clasp::Lookahead::Params p(Var_t::Atom);
 		p.restrictNant = true;
-		DecisionHeuristic* unit = new UnitHeuristic();
+		UnitHeuristic unit;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(unit);
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal c = posLit(ctx.addVar(Var_t::atom_var));
+		ctx.master()->setHeuristic(&unit, Ownership_t::Retain);
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal c = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		s.addPost(new Lookahead(p));
 		ctx.addBinary(a, b);
@@ -210,129 +212,129 @@ public:
 		ctx.addBinary(~b, ~c);
 		ctx.endInit();
 		uint32 n = s.numFreeVars();
-		CPPUNIT_ASSERT(unit->select(s) && s.numFreeVars() != n);
+		CPPUNIT_ASSERT(unit.select(s) && s.numFreeVars() != n);
 	}
 	
 	void testLookaheadStopConflict() {
-		DecisionHeuristic* unit = new UnitHeuristic();
+		UnitHeuristic unit;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(unit);
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
+		ctx.master()->setHeuristic(&unit, Ownership_t::Retain);
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.addBinary(a, b);
-		s.addPost(new Lookahead(Lookahead::atom_lookahead));
+		s.addPost(new Lookahead(Var_t::Atom));
 		ctx.endInit();
 		struct StopConflict : public PostPropagator {
 			bool propagateFixpoint(Solver& s, PostPropagator*) { s.setStopConflict(); return false; }
 			uint32 priority() const   { return PostPropagator::priority_class_simple; }
 		}* x = new StopConflict;
 		s.addPost(x);
-		CPPUNIT_ASSERT(!unit->select(s) && s.hasConflict());
+		CPPUNIT_ASSERT(!unit.select(s) && s.hasConflict());
 		CPPUNIT_ASSERT(s.search(0,0) == value_false);
 	}
 
 	void testBerkmin() {
-		ClaspBerkmin* berkmin = new ClaspBerkmin(0, HeuParams().other(3).init(1));
+		ClaspBerkmin berkmin;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(berkmin);
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
-		Literal c = posLit(ctx.addVar(Var_t::atom_var));
-		Literal d = posLit(ctx.addVar(Var_t::atom_var));
-		Literal e = posLit(ctx.addVar(Var_t::atom_var));
-		Literal f = posLit(ctx.addVar(Var_t::atom_var));
-		Literal g = posLit(ctx.addVar(Var_t::atom_var));
+		ctx.master()->setHeuristic(&berkmin, Ownership_t::Retain);
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		Literal c = posLit(ctx.addVar(Var_t::Atom));
+		Literal d = posLit(ctx.addVar(Var_t::Atom));
+		Literal e = posLit(ctx.addVar(Var_t::Atom));
+		Literal f = posLit(ctx.addVar(Var_t::Atom));
+		Literal g = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		s.stats.conflicts = 1;
 		LitVec up;
-		berkmin->updateReason(s, up, Literal() );
+		berkmin.updateReason(s, up, Literal() );
 		up.push_back(a);
-		berkmin->updateReason( s,up,a );
+		berkmin.updateReason( s,up,a );
 		up.clear();
 		up.push_back(b);
 		up.push_back(b);
-		berkmin->updateReason( s,up,b );
+		berkmin.updateReason( s,up,b );
 		up.clear();
-		berkmin->updateReason( s,up,e );
+		berkmin.updateReason( s,up,e );
 		s.assume( ~b );
 		s.assume( ~c );
 		s.assume( ~d );
 		ClauseCreator cc(&s);
-		cc.start(Constraint_t::learnt_conflict).add(a).add(b).add(c).add(d).end();
+		cc.start(Constraint_t::Conflict).add(a).add(b).add(c).add(d).end();
 		s.undoUntil(0);
 		s.assume( ~e );
 		s.assume( ~f );
 		s.assume( ~g );
-		cc.start(Constraint_t::learnt_loop).add(d).add(e).add(f).add(g).end();
+		cc.start(Constraint_t::Loop).add(d).add(e).add(f).add(g).end();
 		s.undoUntil(0);
 		CPPUNIT_ASSERT_EQUAL(0u, s.numAssignedVars());
-		CPPUNIT_ASSERT_EQUAL(true, berkmin->select(s));
+		CPPUNIT_ASSERT_EQUAL(true, berkmin.select(s));
 		CPPUNIT_ASSERT_EQUAL(b, s.trail().back());	// from conflict clause
 		s.propagate();
-		CPPUNIT_ASSERT_EQUAL(true, berkmin->select(s));
+		CPPUNIT_ASSERT_EQUAL(true, berkmin.select(s));
 		CPPUNIT_ASSERT_EQUAL(e, s.trail().back());	// from loop clause
 		s.propagate();
-		CPPUNIT_ASSERT_EQUAL(true, berkmin->select(s));
+		CPPUNIT_ASSERT_EQUAL(true, berkmin.select(s));
 		CPPUNIT_ASSERT_EQUAL(a.var(), s.trail().back().var());	// highest activity
 	}
 	void testVmtf() {
-		ClaspVmtf* vmtf = new ClaspVmtf;
+		ClaspVmtf vmtf;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(vmtf);
-		ctx.addVar(Var_t::atom_var);
-		ctx.addVar(Var_t::atom_var);
+		ctx.master()->setHeuristic(&vmtf, Ownership_t::Retain);
+		ctx.addVar(Var_t::Atom);
+		ctx.addVar(Var_t::Atom);
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
-		CPPUNIT_ASSERT_EQUAL(true, vmtf->select(s));
+		CPPUNIT_ASSERT_EQUAL(true, vmtf.select(s));
 		s.propagate();
-		CPPUNIT_ASSERT_EQUAL(true, vmtf->select(s));
+		CPPUNIT_ASSERT_EQUAL(true, vmtf.select(s));
 		s.propagate(); 
-		CPPUNIT_ASSERT_EQUAL(false, vmtf->select(s));
+		CPPUNIT_ASSERT_EQUAL(false, vmtf.select(s));
 	}
 
 	void testVsids() {
-		ClaspVsids* vsids = new ClaspVsids;
+		ClaspVsids vsids;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(vsids);
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
+		ctx.master()->setHeuristic(&vsids, Ownership_t::Retain);
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		LitVec up;
 		up.push_back(a);
-		vsids->updateReason( s,up,a );
-		CPPUNIT_ASSERT_EQUAL(true, vsids->select(s));
+		vsids.updateReason( s,up,a );
+		CPPUNIT_ASSERT_EQUAL(true, vsids.select(s));
 		CPPUNIT_ASSERT_EQUAL(true, s.trail().back() == ~a && s.propagate());
-		CPPUNIT_ASSERT_EQUAL(true, vsids->select(s));
+		CPPUNIT_ASSERT_EQUAL(true, vsids.select(s));
 		CPPUNIT_ASSERT_EQUAL(true, s.trail().back() == ~b && s.propagate());
-		CPPUNIT_ASSERT_EQUAL(false, vsids->select(s));
+		CPPUNIT_ASSERT_EQUAL(false, vsids.select(s));
 	}
 	void testVsidsAux() {
-		ClaspVsids* vsids = new ClaspVsids;
+		ClaspVsids vsids;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(vsids);
-		ctx.addVar(Var_t::atom_var);
-		ctx.addVar(Var_t::atom_var);
+		ctx.master()->setHeuristic(&vsids, Ownership_t::Retain);
+		ctx.addVar(Var_t::Atom);
+		ctx.addVar(Var_t::Atom);
 		Solver& s = ctx.startAddConstraints();
 		ctx.endInit();
 		Var v = s.pushAuxVar();
 		LitVec up;
-		vsids->updateReason(s,up,posLit(v));
-		CPPUNIT_ASSERT_EQUAL(true, vsids->select(s));
+		vsids.updateReason(s,up,posLit(v));
+		CPPUNIT_ASSERT_EQUAL(true, vsids.select(s));
 		CPPUNIT_ASSERT(s.value(v) != value_free);
 		s.popAuxVar(1);
-		CPPUNIT_ASSERT_EQUAL(true, vsids->select(s));
+		CPPUNIT_ASSERT_EQUAL(true, vsids.select(s));
 		CPPUNIT_ASSERT(s.trail().back().var() != v);
 	}
 
 	void testStrangeLookSeq() {
 		SharedContext ctx;
-		Lookahead::Params p(Lookahead::body_lookahead); p.limit(3);
-		ctx.master()->setHeuristic(UnitHeuristic::restricted(new SelectFirst));
-		Literal a = posLit(ctx.addVar(Var_t::body_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
+		Lookahead::Params p(Var_t::Body); p.limit(3);
+		ctx.master()->setHeuristic(UnitHeuristic::restricted(new SelectFirst), Ownership_t::Acquire);
+		Literal a = posLit(ctx.addVar(Var_t::Body));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		s.addPost(new Lookahead(p));
 		ctx.endInit();
@@ -344,10 +346,10 @@ public:
 
 	void testStrangeLookSeq2() {
 		SharedContext ctx;
-		Lookahead::Params p(Lookahead::atom_lookahead); p.limit(2);
-		ctx.master()->setHeuristic(UnitHeuristic::restricted(new SelectFirst));
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
+		Lookahead::Params p(Var_t::Atom); p.limit(2);
+		ctx.master()->setHeuristic(UnitHeuristic::restricted(new SelectFirst), Ownership_t::Acquire);
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		s.addPost(new Lookahead(p));
 		ctx.addBinary(a, b);
@@ -360,10 +362,12 @@ public:
 
 	void testRestrictDetach() {
 		SharedContext ctx;
-		Lookahead::Params p(Lookahead::atom_lookahead); p.limit(3);
-		ctx.master()->setHeuristic(UnitHeuristic::restricted(new SelectFirst));
-		Literal a = posLit(ctx.addVar(Var_t::atom_var));
-		Literal b = posLit(ctx.addVar(Var_t::atom_var));
+		Lookahead::Params p(Var_t::Atom); p.limit(3);
+		ctx.master()->setHeuristic(UnitHeuristic::restricted(new SelectFirst), Ownership_t::Acquire);
+		Literal a = posLit(ctx.addVar(Var_t::Atom));
+		Literal b = posLit(ctx.addVar(Var_t::Atom));
+		posLit(ctx.addVar(Var_t::Atom));
+		posLit(ctx.addVar(Var_t::Atom));
 		Solver& s = ctx.startAddConstraints();
 		s.addPost(new Lookahead(p));
 		ctx.addBinary(a, b);
@@ -372,359 +376,437 @@ public:
 		CPPUNIT_ASSERT(x == true && s.decisionLevel() == 1);
 		s.propagate();
 		CPPUNIT_ASSERT(s.getPost(PostPropagator::priority_reserved_look) != 0);
-		s.setHeuristic(new SelectFirst);
+		s.setHeuristic(new SelectFirst, Ownership_t::Acquire);
 		while (s.getPost(PostPropagator::priority_reserved_look) != 0) {
 			s.propagate();
 			s.decideNextBranch();
 		}
 	}
-
-	void testResurrect() {
-		/*
-		typedef std::pair<const char*, DecisionHeuristic*> Heu;
-		Heu heus[3] = {
-			Heu("Berkmin", new ClaspBerkmin()),
-			Heu("Vmtf", new ClaspVmtf()),
-			Heu("Vsids", new ClaspVsids())
-		};
-		for (uint32 i = 0; i != 3; ++i) {
-			SharedContext ctx;
-			ctx.master()->strategy.heuristic.reset(heus[i].second);
-			Var v1 = ctx.addVar(Var_t::atom_var);
-			Var v2 = ctx.addVar(Var_t::atom_var);
-			Var v3 = ctx.addVar(Var_t::atom_var);
-			ctx.startAddConstraints();
-			ctx.endInit();
-			Solver& s = *ctx.master();
-			s.eliminate(v1, true);
-			while (s.strategy.heuristic->select(s) && s.propagate()) { ; }
-			CPPUNIT_ASSERT(2u == s.stats.choices);
-			CPPUNIT_ASSERT_EQUAL_MESSAGE(heus[i].first, 0u, s.numFreeVars());
-			s.eliminate(v1, false);
-			CPPUNIT_ASSERT_EQUAL(value_free, s.value(v1));
-			CPPUNIT_ASSERT_EQUAL_MESSAGE(heus[i].first, true, s.strategy.heuristic->select(s));
-			CPPUNIT_ASSERT_MESSAGE(heus[i].first, value_free != s.value(v1));
-		}
-		*/
-#if defined(CLASP_ENABLE_PRAGMA_TODO)
-		CPPUNIT_FAIL("TODO - Resurrection not yet supported!");
-#endif
-	}
-
 	void testDomSignPos() {
-		DomainHeuristic* dom = new DomainHeuristic;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(dom);
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
 		Solver& s = *ctx.master();
-		LogicProgram api;
-		api.start(ctx).setAtomName(1, "a").startRule(Asp::CHOICERULE).addHead(1).endRule();
-		addDomRule(api, "_heuristic(a,sign,1)");
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
+		Var a = 1;
+		lp.start(ctx).addRule(Head_t::Choice, Potassco::toSpan(&a, 1), Potassco::toSpan<Potassco::Lit_t>());
+		lp.addDomHeuristic(a, DomModType::Sign, 1, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
 		
-		CPPUNIT_ASSERT(dom->select(s));
-		CPPUNIT_ASSERT(s.trail().back() == api.getAtom(1)->literal());
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.isTrue(lp.getLiteral(a)));
 	}
 	void testDomSignNeg() {
-		DomainHeuristic* dom = new DomainHeuristic;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(dom);
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
 		Solver& s = *ctx.master();
-		LogicProgram api;
-		api.start(ctx).setAtomName(1, "a").startRule(Asp::CHOICERULE).addHead(1).endRule();
-		addDomRule(api, "_heuristic(a,sign,-1)");
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
+		Var a = 1;
+		lp.start(ctx).addRule(Head_t::Choice, Potassco::toSpan(&a, 1), Potassco::toSpan<Potassco::Lit_t>());
+		lp.addDomHeuristic(a, DomModType::Sign, -1, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
 		
-		CPPUNIT_ASSERT(dom->select(s));
-		CPPUNIT_ASSERT(s.trail().back() == ~api.getAtom(1)->literal());
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.isTrue(~lp.getLiteral(a)));
 	}
 	void testDomSignInv() {
-		DomainHeuristic* dom = new DomainHeuristic;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(dom);
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
 		Solver& s = *ctx.master();
-		LogicProgram api;
-		api.start(ctx).setAtomName(1, "a")
-			.startRule().addHead(2).addToBody(1, false).endRule()
-			.startRule().addHead(1).addToBody(2, false).endRule();
-		addDomRule(api, "_heuristic(a,sign,1)");
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
+		Var a = 1;
+		lpAdd(lp.start(ctx), "a :- not b.\n"
+			"b :- not a.\n");
+		lp.addDomHeuristic(a, DomModType::Sign, 1, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
 		
-		CPPUNIT_ASSERT(dom->select(s));
-		CPPUNIT_ASSERT(s.isTrue(api.getAtom(1)->literal()));
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.isTrue(lp.getLiteral(a)));
 	}
 	void testDomLevel() {
-		DomainHeuristic* dom = new DomainHeuristic;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(dom);
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
 		Solver& s = *ctx.master();
-		LogicProgram api;
-		api.start(ctx).setAtomName(1, "a").setAtomName(2,"b").startRule(Asp::CHOICERULE).addHead(1).addHead(2).endRule();
-		addDomRule(api, "_heuristic(a,sign,1)");
-		addDomRule(api, "_heuristic(b,sign,1)");
-		addDomRule(api, "_heuristic(a,level,10)");
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
+		Var a = 1, b = 2;
+		lpAdd(lp.start(ctx), "{a;b}.");
+		lp.addDomHeuristic(a, DomModType::Sign, 1, 1);
+		lp.addDomHeuristic(b, DomModType::Sign, 1, 1);
+		lp.addDomHeuristic(a, DomModType::Level, 10, 10);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
 		
-		CPPUNIT_ASSERT(dom->select(s));
-		CPPUNIT_ASSERT(s.trail().back() == api.getAtom(1)->literal());
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.isTrue(lp.getLiteral(a)));
 	}
 
 	void testDomDynamic() {
-		DomainHeuristic* dom = new DomainHeuristic;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(dom);
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
 		Solver& s = *ctx.master();
-		LogicProgram api;
-		api.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c")
-			.startRule(Asp::CHOICERULE).addHead(1).addHead(2).addHead(3).endRule()
-			.startRule().addHead(4).addToBody(1, true).addToBody(2,true).endRule()
-			.setCompute(4, false);
-		addDomRule(api, "_heuristic(a,sign,1)");
-		addDomRule(api, "_heuristic(b,sign,1)");
-		addDomRule(api, "_heuristic(a,level,10)");
-		addDomRule(api, "_heuristic(c,sign,1)", posLit(2));
-		addDomRule(api, "_heuristic(c,sign,-1)", negLit(2));
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(dom->select(s));
-		CPPUNIT_ASSERT(s.trail().back() == api.getAtom(1)->literal());
+		Var a = 1, b = 2, c = 3;
+		lpAdd(lp.start(ctx), "{a;b;c}.\n"
+			"d :- a, b.\n"
+			":- d.\n"); 
+		
+		lp.addDomHeuristic(a, DomModType::Sign, 1, 1);
+		lp.addDomHeuristic(b, DomModType::Sign, 1, 1);
+		lp.addDomHeuristic(a, DomModType::Level, 10, 10);
+		lp.addDomHeuristic(c, DomModType::Sign, 1, 1, b);
+		lp.addDomHeuristic(c, DomModType::Sign, -1, 1, Potassco::neg(b));
+		
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.isTrue(lp.getLiteral(a)));
 		s.propagate();
-		CPPUNIT_ASSERT(s.isFalse(api.getAtom(2)->literal()));
-		CPPUNIT_ASSERT(dom->select(s));
-		CPPUNIT_ASSERT(s.trail().back() == ~api.getAtom(3)->literal());
+		CPPUNIT_ASSERT(s.isFalse(lp.getLiteral(b)));
+		
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.isTrue(~lp.getLiteral(c)));
+
 		s.clearAssumptions();
 		uint32 n = s.numWatches(posLit(2));
 		// test removal of watches
-		ctx.master()->setHeuristic(new SelectFirst());
+		ctx.master()->setHeuristic(new SelectFirst(), Ownership_t::Acquire);
 		CPPUNIT_ASSERT_MESSAGE("Heuristic not detached", s.numWatches(posLit(2)) != n);
 	}
 
 	void testDomPrio() {
-		DomainHeuristic* dom = new DomainHeuristic;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(dom);
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
 		Solver& s = *ctx.master();
 		LogicProgram api;
-		api.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c")
-			.startRule(Asp::CHOICERULE).addHead(1).addHead(2).addHead(3).endRule()
-			.startRule().addHead(4).addToBody(1, true).addToBody(2,true).endRule()
-			.setCompute(4, false);
-		addDomRule(api, "_heuristic(b,sign,1)");
-		addDomRule(api, "_heuristic(a,true,10)");
-		addDomRule(api, "_heuristic(c,sign,1,10)");
-		addDomRule(api, "_heuristic(c,sign,-1,20)", negLit(2));
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(dom->select(s));
-		CPPUNIT_ASSERT(s.trail().back() == api.getAtom(1)->literal());
+		lpAdd(lp.start(ctx), "{a;b;c}.\n"
+			"d :- a, b.\n"
+			":- d.\n"
+			"#heuristic b.         [1@1,sign]\n"
+			"#heuristic a.         [10@10,true]\n"
+			"#heuristic c.         [1@10,sign]\n"
+			"#heuristic c : not b. [-1@20,sign]\n");
+		Var a = 1, b = 2, c = 3;
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.isTrue(lp.getLiteral(a)));
 		s.propagate();
-		CPPUNIT_ASSERT(s.isFalse(api.getAtom(2)->literal()));
-		CPPUNIT_ASSERT(dom->select(s));
-		CPPUNIT_ASSERT(s.trail().back() == ~api.getAtom(3)->literal());
+		CPPUNIT_ASSERT(s.isFalse(lp.getLiteral(b)));
+		
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.isTrue(~lp.getLiteral(c)));
 	}
 	void testDomPrio2() {
-		DomainHeuristic* dom = new DomainHeuristic;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(dom);
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
 		Solver& s = *ctx.master();
-		LogicProgram api;
-		api.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "c")
-			.startRule(Asp::CHOICERULE).addHead(1).addHead(2).addHead(3).endRule()
-			.startRule().addHead(4).addToBody(1, true).addToBody(2,true).endRule()
-			.setCompute(4, false);
-		addDomRule(api, "_heuristic(b,sign,1)");
-		addDomRule(api, "_heuristic(a,true,10)");
-		addDomRule(api, "_heuristic(c,sign,1,30)");
-		addDomRule(api, "_heuristic(c,sign,-1,20)", negLit(2));
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(dom->select(s));
-		CPPUNIT_ASSERT(s.trail().back() == api.getAtom(1)->literal());
+		lpAdd(lp.start(ctx), "{a;b;c}.\n"
+			"d :- a, b.\n"
+			":- d.\n"
+			"#heuristic b.         [1@1,sign]\n"
+			"#heuristic a.         [10@10,true]\n"
+			"#heuristic c.         [1@30,sign]\n"
+			"#heuristic c : not b. [-1@20,sign]\n");
+		Var a = 1, b = 2, c = 3;
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.isTrue(lp.getLiteral(a)));
 		s.propagate();
-		CPPUNIT_ASSERT(s.isFalse(api.getAtom(2)->literal()));
-		CPPUNIT_ASSERT(dom->select(s));
-		CPPUNIT_ASSERT(s.trail().back() == api.getAtom(3)->literal());
+		CPPUNIT_ASSERT(s.isFalse(lp.getLiteral(b)));
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.isTrue(lp.getLiteral(c)));
+	}
+	void testDomPrio3() {
+		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Solver& s = *ctx.master();
+		Var b = 2, c = 3;
+		lpAdd(lp.start(ctx), "{a;c}.\n"
+			"b :- a.\n"
+			"#heuristic a.     [1@30,true]\n"
+			"#heuristic a.     [1@20,false]\n"
+			"#heuristic b.     [2@10,true]\n"
+			"#heuristic b : c. [2@25,false]\n");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		s.assume(lp.getLiteral(c)) && s.propagate();
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.isTrue(~lp.getDomLiteral(b)));
+		s.undoUntil(0);
 	}
 	void testDomInit() {
-		DomainHeuristic* dom = new DomainHeuristic;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(dom);
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
 		Solver& s = *ctx.master();
-		LogicProgram api;
-		api.start(ctx)
-			.setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(Asp::CHOICERULE).addHead(1).addHead(2).endRule();
-		addDomRule(api, "_heuristic(a,init,10,20)");
-		addDomRule(api, "_heuristic(a,init,50,10)");
-		addDomRule(api, "_heuristic(b,init,10,10)");
-		addDomRule(api, "_heuristic(b,init,30,20)");
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(dom->select(s));
-		CPPUNIT_ASSERT(s.trail().back().var() == api.getAtom(2)->var());
+		Var a = 1, b = 2;
+		lpAdd(lp.start(ctx), "{a;b}.\n"
+			"#heuristic a. [10@20,init]\n"
+			"#heuristic a. [50@10,init]\n"
+			"#heuristic b. [10@10,init]\n"
+			"#heuristic b. [30@20,init]\n");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram());
+		ctx.heuristic.add(lp.getLiteral(a).var(), DomModType::Init, 21, 20, lit_true());
+		ctx.endInit();
+		CPPUNIT_ASSERT(s.decideNextBranch());
+		CPPUNIT_ASSERT(s.value(lp.getLiteral(b).var()) != value_free);
 	}
 	void testDomInc() {
 		SharedContext ctx;
 		Solver& s = *ctx.master();
 		
-		LogicProgram api;
-		api.start(ctx).updateProgram();
-		api.setAtomName(1, "a").setAtomName(2, "b").setAtomName(3, "x").setAtomName(4, "y")
-			.startRule(Asp::CHOICERULE).addHead(1).addHead(2).addHead(3).addHead(4).endRule();
-		addDomRule(api, "_heuristic(a,level,1)", posLit(3));
-		addDomRule(api, "_heuristic(b,level,1)", posLit(4));
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		uint32 n = s.numWatches(posLit(3));
-		DomainHeuristic* dom = new DomainHeuristic;
-		dom->startInit(s);
-		dom->endInit(s);
-		s.setHeuristic(dom);
-		CPPUNIT_ASSERT(s.numWatches(posLit(3)) > n);
-		CPPUNIT_ASSERT(api.updateProgram());
-		Var c = api.newAtom();
-		api.setAtomName(c, "c").startRule(Asp::CHOICERULE).addHead(c).endRule();
-		addDomRule(api, "_heuristic(c,level,1)", posLit(3));
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		s.setHeuristic(new SelectFirst());
-		CPPUNIT_ASSERT_MESSAGE("Heuristic not detached", s.numWatches(posLit(3)) == n);
+		Var a = 1, b = 2, c = 3, d = 4, e = 5;
+		lp.start(ctx).updateProgram();
+		lpAdd(lp, "{a;b;c;d}.\n");
+		lp.addDomHeuristic(a, DomModType::Level, 1, 1, c);
+		lp.addDomHeuristic(b, DomModType::Level, 1, 1, d);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		uint32 n = s.numWatches(posLit(c));
+		DomainHeuristic dom;
+		dom.startInit(s);
+		dom.endInit(s);
+		s.setHeuristic(&dom, Ownership_t::Retain);
+		CPPUNIT_ASSERT(s.numWatches(posLit(c)) > n);
+		CPPUNIT_ASSERT(lp.updateProgram());
+		lpAdd(lp, "{e}.");
+		lp.addDomHeuristic(e, DomModType::Level, 1, 1, c);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		s.setHeuristic(new SelectFirst(), Ownership_t::Acquire);
+		CPPUNIT_ASSERT_MESSAGE("Heuristic not detached", s.numWatches(posLit(c)) == n);
 	}
 	void testDomIncPrio() {
 		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
 		Solver& s = *ctx.master();
-		
-		LogicProgram api;
-		api.start(ctx).updateProgram();
-		api.setAtomName(1, "a").startRule(Asp::CHOICERULE).addHead(1).endRule();
-		addDomRule(api, "_heuristic(a,false,3)");
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		DomainHeuristic* dom = new DomainHeuristic;
-		dom->startInit(s);
-		dom->endInit(s);
-		dom->select(s);
-		CPPUNIT_ASSERT(s.isFalse(api.getAtom(1)->literal()));
+		lp.start(ctx).updateProgram();
+		lpAdd(lp, "{a}.");
+		Var a = 1, b = 2;
+		lp.addDomHeuristic(a, DomModType::False,3, 3);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.isFalse(lp.getLiteral(a)));
 		s.undoUntil(0);
-		CPPUNIT_ASSERT(api.updateProgram());
-		Var b = api.newAtom();
-		api.setAtomName(b, "b").startRule(Asp::CHOICERULE).addHead(b).endRule();
-		addDomRule(api, "_heuristic(a,false,1)");
-		addDomRule(api, "_heuristic(b,false,2)");
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		dom->startInit(s);
-		dom->endInit(s);
-		dom->select(s);
-		CPPUNIT_ASSERT(s.isFalse(api.getAtom(1)->literal()));
+		CPPUNIT_ASSERT(lp.updateProgram());
+		lpAdd(lp, "{b}.\n");
+		lp.addDomHeuristic(a, DomModType::False, 1, 1);
+		lp.addDomHeuristic(b, DomModType::False, 2, 2);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.isFalse(lp.getLiteral(a)));
 	}
+	void testDomIncDynPrio() {
+		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Solver& s = *ctx.master();
+		lp.start(ctx).updateProgram();
+		Var a = 1, b = 2;
+		lpAdd(lp, "{a;b}.");
+		lp.addDomHeuristic(a, DomModType::True, 1, 10);
+		lp.addDomHeuristic(a, DomModType::False, 1, 20, b);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.isTrue(lp.getLiteral(a)));
+		s.undoUntil(0);
+		
+		CPPUNIT_ASSERT(lp.updateProgram());
+		lp.addDomHeuristic(a, DomModType::True, 1, 30);
+		lp.addDomHeuristic(b, DomModType::True, 2, 2);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.isTrue(lp.getLiteral(b)));
+		CPPUNIT_ASSERT(s.propagate());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.isTrue(lp.getLiteral(a)));
+	}
+	
 	void testDomReinit() {
 		SharedContext ctx;
 		Solver& s = *ctx.master();
-		
-		LogicProgram api;
-		api.start(ctx).updateProgram();
-		api.setAtomName(1, "a").setAtomName(2, "b").startRule(Asp::CHOICERULE).addHead(1).addHead(2).endRule();
-		addDomRule(api, "_heuristic(b,level,1)");
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		DomainHeuristic* dom = new DomainHeuristic;
-		dom->startInit(s);
-		dom->endInit(s);
-		s.setHeuristic(dom);
-		dom->select(s);
-		CPPUNIT_ASSERT(s.value(s.sharedContext()->symbolTable()[2].lit.var()) != value_free);
-		CPPUNIT_ASSERT(api.updateProgram());
-		Var c = api.newAtom();
-		api.setAtomName(c, "c").startRule(Asp::CHOICERULE).addHead(c).endRule();
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Var b = 2;
+		lp.start(ctx).updateProgram();
+		lpAdd(lp, "{a;b}.");
+		lp.addDomHeuristic(b, DomModType::Level, 1, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.value(lp.getLiteral(b).var()) != value_free);
+		CPPUNIT_ASSERT(lp.updateProgram());
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		lpAdd(lp, "{c}.");
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
 
-		dom = new DomainHeuristic;
-		dom->startInit(s);
-		dom->endInit(s);
-		s.setHeuristic(dom);
-		dom->select(s);
-		CPPUNIT_ASSERT(s.value(s.sharedContext()->symbolTable()[2].lit.var()) != value_free);
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.value(lp.getLiteral(b).var()) != value_free);
 	}
 
 	void testDomMinBug() {
 		SharedContext ctx;
-		ctx.master()->setHeuristic(new DomainHeuristic);
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
 		
-		LogicProgram api;
-		api.start(ctx).setAtomName(1, "a").setAtomName(2, "b")
-			.startRule().addHead(1).addToBody(2, false).endRule()
-			.startRule().addHead(2).addToBody(1, false).endRule()
-		;
-		addDomRule(api, "_heuristic(a,false,1)");
-		addDomRule(api, "_heuristic(b,false,1)");
-		
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
+		Var a = 1, b = 2;
+		lpAdd(lp.start(ctx), "a :- not b. b :- not a.");
+		lp.addDomHeuristic(a, DomModType::False, 1, 1);
+		lp.addDomHeuristic(b, DomModType::False, 1, 1);
+		LitVec min;
+		ctx.heuristic.domRec = &min;
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
 
-		CPPUNIT_ASSERT(ctx.symbolTable().domLits.size() == 2);
+		CPPUNIT_ASSERT(min.size() == 2);
 	}
-	void testDomSignPrio() {
-		SharedContext ctx;
-		DecisionHeuristic* dom;
-		ctx.master()->setHeuristic(dom = new DomainHeuristic);
-		Solver& s = *ctx.master();
-
-		LogicProgram api;
-		api.start(ctx).setAtomName(1, "a").setAtomName(2, "b")
-			.startRule(Asp::CHOICERULE).addHead(1).addHead(2).endRule()
-			;
-		// implicit prio
-		addDomRule(api, "_heuristic(a,sign,100)");
-		addDomRule(api, "_heuristic(a,sign,-10)");
-		// explicit prio
-		addDomRule(api, "_heuristic(b,sign,100,100)");
-		addDomRule(api, "_heuristic(b,sign,-10,10)");
-
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-
-		Literal a = api.getLiteral(1);
-		Literal b = api.getLiteral(2);
-
-		Literal x = dom->doSelect(s);
-		s.assume(x) && s.propagate();
-		Literal y = dom->doSelect(s);
-		s.assume(y) && s.propagate();
-		CPPUNIT_ASSERT(x != y);
-		CPPUNIT_ASSERT(x == a || x == b);
-		CPPUNIT_ASSERT(y == a || y == b);
-	}
-	void testDomPrefixBug() {
-		DomainHeuristic* dom = new DomainHeuristic;
-		SharedContext ctx;
-		ctx.master()->setHeuristic(dom);
-		LogicProgram api;
-		api.start(ctx).setAtomName(1, "a").setAtomName(2,"ab").setAtomName(3,"abc").startRule(Asp::CHOICERULE).addHead(1).addHead(2).addHead(3).endRule();
-		addDomRule(api, "_heuristic(ab,level,1)");
-		addDomRule(api, "_heuristic(ab,factor,2)");
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		const DomScore& scA = dom->score(api.getLiteral(1).var());
-		const DomScore& scB = dom->score(api.getLiteral(2).var());
-		const DomScore& scC = dom->score(api.getLiteral(3).var());
-		CPPUNIT_ASSERT(scA.level < scB.level);
-		CPPUNIT_ASSERT(scC.level < scB.level);
-		CPPUNIT_ASSERT(scA.factor < scB.factor);
-		CPPUNIT_ASSERT(scC.factor < scB.factor);
-	}
+	
 	void testDomSameVar() {
-		DecisionHeuristic* dom = new DomainHeuristic;
 		SharedContext ctx;
-		ctx.master()->setHeuristic(dom);
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
 		Solver& s = *ctx.master();
-		LogicProgram api;
-		api.start(ctx).setAtomName(1, "a").setAtomName(2, "b")
-			.startRule().addHead(1).addToBody(2, false).endRule()
-			.startRule().addHead(2).addToBody(1, false).endRule();
-		addDomRule(api, "_heuristic(a,true,2)");
-		addDomRule(api, "_heuristic(b,true,1)");
-		CPPUNIT_ASSERT_EQUAL(true, api.endProgram() && ctx.endInit());
-		CPPUNIT_ASSERT(api.getLiteral(1).var() == api.getLiteral(2).var());
-		Literal x = dom->doSelect(s);
-		CPPUNIT_ASSERT(x == api.getLiteral(1));
+		Var a = 1, b = 2;
+		lpAdd(lp.start(ctx), "a :- not b. b :- not a.");
+		lp.addDomHeuristic(a, DomModType::True, 2, 2);
+		lp.addDomHeuristic(b, DomModType::True, 1, 1);
+		LitVec min;
+		ctx.heuristic.domRec = &min;
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.isTrue(lp.getLiteral(a)));
+		CPPUNIT_ASSERT(min.size() == 2);
 	}
-	void addDomRule(LogicProgram& prg, const char* heu, Literal pre = posLit(0)) {
-		Var h = prg.newAtom();
-		prg.setAtomName(h, heu);
-		prg.startRule().addHead(h);
-		if (pre != posLit(0)) prg.addToBody(pre.var(), pre.sign() == false);
-		prg.endRule();
+
+	void testDomEqAtomLevel() {
+		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Solver& s = *ctx.master();
+		Var a = 1, b = 2, c = 3;
+		lpAdd(lp.start(ctx), 
+			"{a;c}.\n"
+			"b :- a.\n");
+		lp.addDomHeuristic(a, DomModType::Level, 1, 3);
+		lp.addDomHeuristic(b, DomModType::Level, 3, 2);
+		lp.addDomHeuristic(c, DomModType::Level, 2, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.value(lp.getDomLiteral(b).var()) != value_free);
+	}
+	void testDomEqAtomSign() {
+		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Var a = 1, b = 2;
+		lpAdd(lp.start(ctx), "{a}. b :- a.");
+		lp.addDomHeuristic(a, DomModType::Sign, 1, 1);
+		lp.addDomHeuristic(b, DomModType::Sign,-1, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		
+		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->pref(lp.getDomLiteral(a).var()).has(ValueSet::user_value));
+		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->pref(lp.getDomLiteral(b).var()).has(ValueSet::user_value));
+	}
+	void testDomCompAtomLevel() {
+		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Solver& s = *ctx.master();
+		Var a = 1, b = 2, c = 3;
+		lpAdd(lp.start(ctx), "{a;c}. b :- not a.");
+		lp.addDomHeuristic(a, DomModType::Level, 1, 3);
+		lp.addDomHeuristic(b, DomModType::Level, 3, 2);
+		lp.addDomHeuristic(c, DomModType::Level, 2, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.value(lp.getDomLiteral(b).var()) != value_free);
+	}
+	void testDomCompAtomSign() {
+		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Var a = 1, b = 2;
+		lpAdd(lp.start(ctx), "{a}. b :- not a.");
+		lp.addDomHeuristic(a, DomModType::Sign, 1, 1);
+		lp.addDomHeuristic(b, DomModType::Sign, 1, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		
+		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->pref(lp.getDomLiteral(a).var()).has(ValueSet::user_value));
+		CPPUNIT_ASSERT_EQUAL(true, ctx.master()->pref(lp.getDomLiteral(b).var()).has(ValueSet::user_value));
+	}
+	void testDomCompAtomTF() {
+		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Solver& s = *ctx.master();
+		Var a = 1, b = 2;
+		lpAdd(lp.start(ctx), "a :- not b. b :- not a. {c}.");
+		lp.addDomHeuristic(a, DomModType::True, 10, 10);
+		lp.addDomHeuristic(b, DomModType::True, 20, 20);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.isTrue(lp.getDomLiteral(b)));
+	}
+	void testDomDefault() {
+		SharedContext ctx;
+		DomainHeuristic dom;
+		dom.setDefaultMod(HeuParams::mod_level, 0);
+		ctx.master()->setHeuristic(&dom, Ownership_t::Retain);
+		Var v1 = ctx.addVar(Var_t::Atom);
+		Var v2 = ctx.addVar(Var_t::Body);
+		ctx.startAddConstraints();
+		ctx.endInit();
+		CPPUNIT_ASSERT(dom.score(v1).level == 1);
+		CPPUNIT_ASSERT(dom.score(v2).level == 0);
+		ctx.unfreeze();
+		dom.setDefaultMod(HeuParams::mod_level, HeuParams::pref_show);
+		Var v3 = ctx.addVar(Var_t::Atom);
+		ctx.output.add("v1", posLit(v1));
+		ctx.output.add("v3", posLit(v3));
+		ctx.startAddConstraints();
+		ctx.endInit();
+		CPPUNIT_ASSERT(dom.score(v1).level == dom.score(v3).level);
+		CPPUNIT_ASSERT(dom.score(v2).level == 0);
+	}
+
+	// UNSUPPORTED
+
+	void testDomAtomicPrio() {
+		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Solver& s = *ctx.master();
+		lp.start(ctx).updateProgram();
+		Var a = 1, b = 2;
+		lpAdd(lp, "{a}. b :- a.");
+		lp.addDomHeuristic(a, DomModType::False, 2, 3);
+		lp.addDomHeuristic(b, DomModType::False, 1, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.isFalse(lp.getDomLiteral(a)));
+		s.undoUntil(0);
+		CPPUNIT_ASSERT(lp.updateProgram());
+		lp.addDomHeuristic(b, DomModType::True, 3, 2);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.isTrue(lp.getDomLiteral(b)));
+	}
+	void testDomEqVarDiffLevel() {
+		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Solver& s = *ctx.master();
+		Var a = 1, b = 2, c = 3;
+		lp.start(ctx);
+		lpAdd(lp, "{a;c}. b :- a.");
+		lp.addDomHeuristic(a, DomModType::Level, 2, 1);
+		lp.addDomHeuristic(c, DomModType::Level, 2, 1);
+		lp.addDomHeuristic(c, DomModType::Init, 10, 1);
+		lp.addDomHeuristic(b, DomModType::Init, 20, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.value(lp.getLiteral(c).var()) == value_free);
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.value(lp.getLiteral(c).var()) != value_free);
+	}
+	void testDomEqVarDiffLevelInc() {
+		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Solver& s = *ctx.master();
+		Var a = 1, b = 2, c = 3;
+		lp.start(ctx);
+		lp.updateProgram();
+		lpAdd(lp, "{a;c}. b :- a.");
+		lp.addDomHeuristic(a, DomModType::Level, 2, 1);
+		lp.addDomHeuristic(c, DomModType::Level, 2, 1);
+		lp.addDomHeuristic(c, DomModType::Init, 10, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.value(lp.getLiteral(c).var()) != value_free);
+		
+		s.undoUntil(0);
+		CPPUNIT_ASSERT(lp.updateProgram());
+		lp.addDomHeuristic(b, DomModType::Init, 20, 1);
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.value(lp.getLiteral(c).var()) != value_free);
+	}
+	void testDomEqVarDiffLevelCond() {
+		SharedContext ctx;
+		ctx.master()->setHeuristic(new DomainHeuristic, Ownership_t::Acquire);
+		Solver& s = *ctx.master();
+		Var a = 1, b = 2, c = 3, d = 4;
+		lp.start(ctx);
+		lpAdd(lp, "{a;b;c;d}. b :- a.");
+		lp.addDomHeuristic(b, DomModType::Init, 40, 1);
+		lp.addDomHeuristic(d, DomModType::Init, 50, 1);
+		lp.addDomHeuristic(d, DomModType::Sign, 1, 1);
+		lp.addDomHeuristic(a, DomModType::True, 2, 1, d);
+		lp.addDomHeuristic(c, DomModType::True, 2, 1, d);
+		lp.addDomHeuristic(c, DomModType::Init, 30, 1);
+
+		CPPUNIT_ASSERT_EQUAL(true, lp.endProgram() && ctx.endInit());
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.isTrue(lp.getLiteral(d)));
+		s.propagate();
+		CPPUNIT_ASSERT(s.decideNextBranch() && s.value(lp.getLiteral(c).var()) != value_free);
 	}
 };
 
