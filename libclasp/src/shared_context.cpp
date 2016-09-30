@@ -601,7 +601,9 @@ bool SharedContext::unfreezeStep() {
 	for (SolverVec::size_type i = solvers_.size(); i-- ; ) {
 		Solver& s = *solvers_[i];
 		if (!s.validVar(step_.var())) { continue; }
+		share_.frozen = i > 0;
 		s.endStep(lastTopLevel_);
+		share_.frozen = 0;
 		const SolverParams& params = configuration()->solver(s.id());
 		if (params.forgetLearnts())   { s.reduceLearnts(1.0f); }
 		if (params.forgetHeuristic()) { s.setHeuristic(0); }
@@ -704,9 +706,9 @@ bool SharedContext::endInit(bool attachAll) {
 	share_.frozen               = 1;
 	for (uint32 i = ok && attachAll ? 1 : concurrency(); i != concurrency(); ++i) {
 		if (!hasSolver(i)) { addSolver(); }
-		if (!attach(i))    { return false; }
+		if (!attach(i))    { ok = false; break; }
 	}
-	return ok || (detach(*master(), false), false);
+	return ok || (detach(*master(), false), master()->setStopConflict(), false);
 }
 
 bool SharedContext::attach(Solver& other) {
