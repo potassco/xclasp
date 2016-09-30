@@ -34,6 +34,8 @@ class FacadeTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(testPrepareIsImplicit);
 	CPPUNIT_TEST(testCannotPrepareSolvedProgram);
 	CPPUNIT_TEST(testCannotSolveSolvedProgram);
+	CPPUNIT_TEST(testSolveAfterStopConflict);
+	CPPUNIT_TEST(testRestartAfterPrepare);
 	
 	CPPUNIT_TEST(testUpdateWithoutPrepareDoesNotIncStep);
 	CPPUNIT_TEST(testUpdateWithoutSolveDoesNotIncStep);
@@ -123,6 +125,34 @@ public:
 		libclasp.prepare();
 		CPPUNIT_ASSERT(libclasp.solve().sat());
 		CPPUNIT_ASSERT_THROW(libclasp.solve(), std::logic_error);
+	}
+	void testSolveAfterStopConflict() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config, true);
+		addProgram(asp);
+		struct PP : public PostPropagator {
+			uint32 priority() const { return priority_reserved_msg; }
+			bool propagateFixpoint(Solver& s, PostPropagator*) {
+				s.setStopConflict();
+				return false;
+			}
+		} pp;
+		libclasp.ctx.master()->addPost(&pp);
+		libclasp.prepare();
+		CPPUNIT_ASSERT(libclasp.solve().unknown());
+		libclasp.ctx.master()->removePost(&pp);
+		libclasp.update();
+		CPPUNIT_ASSERT(libclasp.solve().sat());
+	}
+	
+	void testRestartAfterPrepare() {
+		Clasp::ClaspFacade libclasp;
+		Clasp::ClaspConfig config;
+		libclasp.startAsp(config);
+		libclasp.prepare();
+		Clasp::Asp::LogicProgram& asp = libclasp.startAsp(config);
+		CPPUNIT_ASSERT(!asp.frozen());
 	}
 	void testUpdateWithoutPrepareDoesNotIncStep() {
 		Clasp::ClaspFacade libclasp;
@@ -511,10 +541,12 @@ public:
 		libclasp.startAsp(config, true).setAtomName(1, "a").setAtomName(2, "b").startRule(Asp::CHOICERULE).addHead(1).addHead(2).endRule();
 		libclasp.prepare();
 		CPPUNIT_ASSERT(!isSentinel(libclasp.ctx.stepLiteral()));
-		config.solve.setSolvers(2);
-		static_cast<Asp::LogicProgram&>(libclasp.update(true)).startRule(Asp::CHOICERULE).addHead(3).addHead(4).endRule();
-		libclasp.prepare();
-		CPPUNIT_ASSERT(libclasp.ctx.concurrency() == 2 && libclasp.ctx.hasSolver(1));
+		if (config.solve.supportedSolvers() > 1) {
+			config.solve.setSolvers(2);
+			static_cast<Asp::LogicProgram&>(libclasp.update(true)).startRule(Asp::CHOICERULE).addHead(3).addHead(4).endRule();
+			libclasp.prepare();
+			CPPUNIT_ASSERT(libclasp.ctx.concurrency() == 2 && libclasp.ctx.hasSolver(1));
+		}
 	}
 	
 	void testIncrementalRemoveSolver() {

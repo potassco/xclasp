@@ -58,7 +58,9 @@ void ClaspConfig::prepare(SharedContext& ctx) {
 	if (numS > solve.recommendedSolvers()) {
 		ctx.report(warning(Event::subsystem_facade, clasp_format_error("Oversubscription: #Threads=%u exceeds logical CPUs=%u.", numS, solve.recommendedSolvers())));
 	}
-	if (std::abs(solve.numModels) != 1) { satPre.mode = SatPreParams::prepro_preserve_models; }
+	if (std::abs(solve.numModels) != 1 || !solve.models()) {
+		satPre.mode = SatPreParams::prepro_preserve_models;
+	}
 	solve.setSolvers(numS);
 	ctx.setConcurrency(solve.numSolver(), SharedContext::mode_resize);
 }
@@ -159,7 +161,7 @@ void ClaspFacade::SolveStrategy::runAlgo(ClaspFacade& f, State done) {
 		bool           more;
 	} scope(this, &f, done);
 	if (state != state_running){ state = state_running; }
-	if (!signal && f.ctx.ok()) {
+	if (!signal && !f.ctx.master()->hasConflict()) {
 		f.step_.solveTime = f.step_.unsatTime = RealTime::getTime();
 		scope.more = algo->solve(f.ctx, f.assume_, &f);
 	}
@@ -293,7 +295,7 @@ void ClaspFacade::discardProblem() {
 	solve_ = 0;
 	accu_ = 0;
 	step_.init(*this);
-	if (ctx.numConstraints() || ctx.numVars()) { ctx.reset(); }
+	if (ctx.frozen() || ctx.numVars()) { ctx.reset(); }
 }
 void ClaspFacade::init(ClaspConfig& config, bool discard) {
 	if (discard) { discardProblem(); }
@@ -375,7 +377,7 @@ bool ClaspFacade::enableProgramUpdates() {
 	return lpStats_.get() != 0; // currently only ASP supports program updates
 }
 
-ProgramBuilder& ClaspFacade::update(bool reloadConfig) {
+ProgramBuilder& ClaspFacade::update(bool reloadConfig, bool updateProgram) {
 	CLASP_ASSERT_CONTRACT(config_ && program() && !solving());
 	CLASP_ASSERT_CONTRACT_MSG(step_.result.signal != SIGINT, "Interrupt not handled!");
 	if (reloadConfig) { 
@@ -384,7 +386,7 @@ ProgramBuilder& ClaspFacade::update(bool reloadConfig) {
 	if (solved()) {
 		startStep(step() + 1);
 	}
-	if (builder_->frozen()) {
+	if (builder_->frozen() && updateProgram) {
 		assume_.clear();
 		builder_->updateProgram();
 	}
