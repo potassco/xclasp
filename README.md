@@ -1,5 +1,8 @@
 # xclasp [![Deprecated](https://img.shields.io/badge/status-deprecated-yellow.svg)](https://github.com/potassco/clasp)
 
+> A variant of the clasp solver for extracting learned constraints
+
+## Overview
 
 `xclasp` was an extension of the answer set solver [`clasp`](https://github.com/potassco/clasp) that allowed for logging the learned constraints.
 
