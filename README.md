@@ -1,159 +1,52 @@
-# xclasp—A Variant of clasp for Extracting Learned Constraints
+# xclasp [![Deprecated](https://img.shields.io/badge/status-deprecated-yellow.svg)](https://github.com/potassco/clasp)
 
-`xclasp` is an extension of the answer set solver [`clasp`](https://github.com/potassco/clasp) that allows for logging the constraints learned while solving.
-The extracted constraints can then be reused by offline procedures, for instance, to generalize the constraints with [`ginkgo`](https://github.com/potassco/ginkgo/).
+
+`xclasp` was an extension of the answer set solver [`clasp`](https://github.com/potassco/clasp) that allowed for logging the learned constraints.
+
+The extracted constraints could then be reused by offline procedures.
+For instance, [`ginkgo`](https://github.com/potassco/ginkgo/) generalizes learned constraints.
+
+`xclasp` is now obsolete, and its functionality has fully been integrated into [`clasp`](https://github.com/potassco/clasp) with the 3.2 release.
+
+## Replacing xclasp with clasp
+
+To extract learned constraints, `xclasp` was usually invoked as follows:
+
+```bash
+xclasp --log-learnts --resolution-scheme=named \
+       --heuristic=Domain --dom-mod=1,16 --loops=no --reverse-arcs=0 --otfs=0
+```
+
+The same result can now be achieved with `clasp`:
+
+```bash
+clasp --lemma-out=- --lemma-out-txt --lemma-out-dom=output \
+      --heuristic=Domain --dom-mod=1,16 --loops=no --reverse-arcs=0 --otfs=0
+```
+
+The command-line option `--lemma-out=<file>` logs the extracted constraints to the specified file or to `stdout` if `-` is specified instead of a file.
+
+`--lemma-out=txt` prints the constraints in text form instead of `aspif`.
+
+`--lemma-out-dom=output` ensures that only such constraints are logged that contain only (named) output variables.
+
+`clasp -h3` provides more details on the new options.
+
+## Legacy Code
+
+For reference, `xclasp`’s original code is archived in the [`xclasp`](https://github.com/potassco/xclasp/tree/xclasp) branch.
 
 ## Literature
 
-* [Patrick Lühne](https://www.luehne.de), 2015. [*Generalizing Learned Knowledge in Answer Set Solving*](https://www.luehne.de/theses/generalizing-learned-knowledge-in-answer-set-solving.pdf). M.Sc. Thesis, Hasso Plattner Institute, Potsdam
+* Martin Gebser, Roland Kaminski, Benjamin Kaufmann, [Patrick Lühne](https://www.luehne.de), Javier Romero, and Torsten Schaub: [*Answer Set Solving with Generalized Learned 
+Constraints*](http://software.imdea.org/Conferences/ICLP2016/Proceedings/ICLP-TCs/p09-gebser.pdf). In: Technical Communications of the [32nd International Conference on Logic 
+Programming](http://software.imdea.org/Conferences/ICLP2016/), 2016, pp. 9:1–9:14
 
-## Building and Installation
-
-`xclasp` requires a C++11-capable compiler.
-Aside from that, the build instructions of [`clasp`](https://github.com/potassco/clasp) apply.
-
-## Usage
-
-`xclasp` works like `clasp`.
-With the additional option `--log-learnts=n`, the first `n` conflict constraints are logged to stderr.
-`--logged-learnt-limit=n` tells `xclasp` to stop after having extracted `n` constraints.
-`--resolution-scheme=named` tells `xclasp` to use the named-literals resolution scheme, a modification of the 1UIP resolution scheme that enforces all literals to be named.
-
-```bash
-> gringo program.lp | xclasp --log-learnts --resolution-scheme=named --heuristic=Domain --dom-mod=1,16 --loops=no --reverse-arcs=0 --otfs=0
-```
-
-When invoking `xclasp` like this, all extracted constraints are guaranteed to contain named literals only (given that all necessary symbols are exported from the grounder via #show commands).
+* [Patrick Lühne](https://www.luehne.de): [*Generalizing Learned Knowledge in Answer Set 
+Solving*](https://www.luehne.de/theses/generalizing-learned-knowledge-in-answer-set-solving.pdf). M.Sc. Thesis, 2015, Hasso Plattner Institute, Potsdam
 
 ## Contributors
 
-* Benjamin Kaufmann (`clasp` and `xclasp`)
+* Benjamin Kaufmann (`xclasp`, integration into `clasp`)
 * [Patrick Lühne](https://www.luehne.de) (`xclasp`)
 
-## Original `clasp` Readme
-
-```text
-                                clasp-3.x
-              A conflict-driven nogood learning answer set solver 
-                     http://www.cs.uni-potsdam.de/clasp/
-					  http://potassco.sourceforge.net/
-
-OVERVIEW
-  clasp is an answer set solver for (extended) normal and disjunctive logic programs. 
-  It combines the high-level modeling capacities of answer set programming
-  with state-of-the-art techniques from the area of Boolean constraint solving.
-  The primary clasp algorithm relies on conflict-driven nogood learning, 
-  a technique that proved very successful for satisfiability checking (SAT).
-  Starting with version 2.0, clasp supports parallel (multithreaded) solving.
-  Starting with version 3.0, clasp supports
-   - disjunctive logic programs as in claspD-2
-   - domain heuristic modifications as in hclasp via option "--heuristic=domain"
-   - unsatisfiable-core based optimization as in unclasp via "--opt-strategy={4,5}"
-  
-  clasp is written in (mostly) Standard-C++. It was successfully built and run
-  under Linux (x86-32, x86-64) using gcc/clang and Windows (x86-32, x86-64) using
-  either Microsoft Visual Studio or MinGW. 
-  
-  Detailed information (including a User's manual), source code,
-  and pre-compiled binaries are available at: http://potassco.sourceforge.net/
- 
-LICENSE
-  clasp is part of the Potassco project hosted at SourceForge.
-  It is distributed under the GNU Public License. See COPYING for
-  details regarding the license.
-
-PACKAGE CONTENTS
-  COPYING      - GNU Public License
-  CHANGES      - Major changes between versions
-  README       - This file
-  configure.{sh,bat}
-               - Simple script that creates Makefiles for building clasp (library and application) 
-  app/         - Source code directory of the command-line interface
-  libclasp/    - Directory of the clasp (static) library (sources, documentation, unit tests)
-  libprogram_opts/
-               - Library for parsing command-line options (needed by app)
-  build_vc/    - Directory containing Visual Studio project files for building clasp
-  tools/       - Some additional files
-  
-BUILDING & INSTALLING
-  The preferred way to build clasp is to use make and the provided configure script.
-  You'll need to have the GNU Compiler Collection (GCC) version 3 or
-  better installed in order to build clasp. You'll also need GNU make 3.80 or better. 
-  On Microsoft Windows, we recommend using MinGW available from http://www.mingw.org/ - 
-  You may want to visit http://www.mingw.org/wiki/Getting_Started for detailed
-  instructions on installing MinGW. Make sure to also install MinGW-make.
-  
-  In the following it is assumed that 'make' is an alias for the installed GNU make. 
-  If this is not the case on your system, replace 'make' with the name of the GNU make 
-  executable (e.g. gmake). Furthermore, on Microsoft Windows use ./configure.bat instead of
-  ./configure.sh.
-
-  clasp's multithread support requires the Intel Threading Building Blocks library (version >= 3.x) 
-  which is freely available at: http://threadingbuildingblocks.org/ 
-  After downloading and installing you may want to set and export the 
-  TBB30_INSTALL_DIR environment variable.
-
-  Type 
-    ./configure.sh --help 
-  to get an overview of all supported build configurations/options.
-  
-  To build clasp:
-    ./configure.sh
-    cd build/release
-    make
-  
-  To build clasp with multithread support using TBB30_INSTALL_DIR:
-    ./configure.sh --with-mt
-    cd build/release_mt
-    make
-  
-  To build clasp with multithread support using custom directory structure:
-    ./configure.sh --with-mt TBB_INCLUDE=<path_to_tbb_include> TBB_LIB=<path_to_tbb_lib>
-    cd build/release_mt
-    make
-
-  To install clasp:
-    make install
-	
-  By default, 'make install' will install clasp in '/usr/local/bin'
-  You can specify an installation prefix other than '/usr/local' 
-  by running the configure-script with the option '--prefix=PATH'.
-  Alternatively, use option '--bindir=PATH' to directly specify the
-  installation path. 
-
-  Finally, you can always skip installation and simply copy the
-  clasp executable to a directory of your choice.
-		
-BUILDING WITH Microsoft Visual Studio
-  In the directory build_vc/ we provide Microsoft Visual Studio project files
-  for building clasp. You can download the freely available express edition 
-  of Visual C++ from here:
-  http://www.microsoft.com/express/Downloads/
-  Once installed:
-    - open build_vc\vc9\clasp\clasp.sln
-    - select the desired solution configuration (typically release_static) 
-    - build the "app" project	
-
-USAGE
-  clasp reads problem instances either from stdin, e.g 
-    cat problem | clasp
-  or from a given file, e.g
-    clasp problem
-	
-  Beside logic programs in SMODELS-format, clasp also supports SAT-problems in DIMACS-,
-  Max-SAT in (extended) DIMACS-, and PB-problems in OPB and WBO-format.
-	
-  Type
-    clasp --help
-  to get an overview of the various options supported by clasp.
-	
-  In addition to printing status information, clasp also
-  provides information about the computation via its exit status.
-  The exit status is:
-    10: if the problem was found to be satisfiable
-    20: if the problem was proved to be unsatisfiable
-    0 : if the satisfiability of problem is not known, 
-        because search was either interrupted or not started
-    127: if clasp ran out of memory
-    Furthermore, the exit status of 1 indicates an error.
-```
